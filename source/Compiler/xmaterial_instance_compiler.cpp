@@ -3,6 +3,8 @@
 #include "source/xmaterial_intance_descriptor.h"
 #include "source/Compiler/xmaterial_instance_compiler.h"
 
+#include "dependencies/xproperty/source/xcore/my_properties.cpp"
+
 namespace xmaterial_instance_compiler
 {
     struct implementation final : xmaterial_instance_compiler::instance
@@ -12,42 +14,71 @@ namespace xmaterial_instance_compiler
             //
             // Load the descriptor 
             //
-            auto DescriptorFileName = std::format( L"{}/{}/Descriptor.txt", m_ProjectPaths.m_Project, m_InputSrcDescriptorPath);
+            auto                            DescriptorFileName  = std::format( L"{}/{}/Descriptor.txt", m_ProjectPaths.m_Project, m_InputSrcDescriptorPath);
+            auto                            BaseDescriptor      = xresource_pipeline::factory_base::Find(std::string_view{ "Material Instance" })->CreateDescriptor();
+            xproperty::settings::context    Context             = {};
+            if (auto Err = BaseDescriptor->Serialize(true, DescriptorFileName, Context); Err)
+                return Err;
 
-            xmaterial_instance::descriptor Descriptor;
-            xtextfile::stream              Stream;
-            if ( auto Err = Stream.Open(true, DescriptorFileName, xtextfile::file_type::TEXT ); Err )
-                return xerr::create_f<state, "Fail to open the descriptor">(Err);
+            //
+            // Validate material instance
+            //
+            {
+                std::vector<std::string> ErrorList;
+                BaseDescriptor->Validate(ErrorList);
+                if (not ErrorList.empty())
+                {
+                    // Print the error messages
+                    for (auto& E : ErrorList)
+                        LogMessage(xresource_pipeline::msg_type::ERROR, E);
 
-            xproperty::settings::context Context{};
-            if ( auto Err = xproperty::sprop::serializer::Stream( Stream, Descriptor, Context); Err )
-                return xerr::create_f<state, "Fail to load the descriptor">(Err);
+                    return xerr::create_f<state, "Material Instance failed validation">();
+                }
+            }
+
+            // Convert to something more friendly 
+            auto& Descriptor = *reinterpret_cast<xmaterial_instance::descriptor*>(BaseDescriptor.get());
+
+            //
+            //  make sure that we have something valid
+            //
+            if ( Descriptor.m_MaterialRef.empty() )
+                return xerr::create_f<state, "Material Instance without a material reference">();
+
+            //
+            // Set all the final textures
+            //
+            if (Descriptor.m_lTextureDefaults.size() != Descriptor.m_lTextures.size())
+                return xerr::create_f<state, "Default and Set Textures size do not match">();
+
+            for (auto& E : Descriptor.m_lTextureDefaults)
+            {
+                const auto Index = static_cast<int>(&E - Descriptor.m_lTextureDefaults.data());
+                if (Descriptor.m_lTextures[Index].empty())
+                {
+                    xerr::LogMessage<state::FAILURE>(std::format("Forgot to assign a texture {} With Index {} Entry Number {}", E.m_Name, E.m_Index, Index));
+                    return xerr::create_f< state, "You forgot to assign a texture">();
+                }
+
+                Descriptor.m_lFinalTextures[E.m_Index].m_TextureRef = Descriptor.m_lTextures[Index];
+            }
 
             //
             // Assign all the textures
             //
             displayProgressBar("Compiling Assigning Textures", 0.0f);
 
-            auto Textures = std::make_unique<xmaterial_instance::data_file::texture[]>(Descriptor.m_lTextures.size());
+            auto Textures = std::make_unique<xmaterial_instance::data_file::texture[]>(Descriptor.m_lFinalTextures.size());
 
-            for ( auto& E : Descriptor.m_lTextures)
+            for ( auto& E : Descriptor.m_lFinalTextures)
             {
-                const auto Index = static_cast<int>(&E - Descriptor.m_lTextures.data());
-                if( E.m_TextureRef.empty() && E.m_DefaultTextureRef.empty() )
-                {
-                    xerr::LogMessage<state::FAILURE>( std::format("Forgot to assign a texture {} With Index {} Entry Number", E.m_Name, E.m_Index, Index));
-                    return xerr::create_f< state, "You forgot to assign a texture and there is not a default texture in the material to replace it">();
-                }
+                const auto Index = static_cast<int>(&E - Descriptor.m_lFinalTextures.data());
 
                 //
                 // Assign all the required data
                 //
                 auto& T = Textures[Index];
-
-                if (not E.m_TextureRef.empty() ) T.m_TexureRef = E.m_TextureRef;
-                else                             T.m_TexureRef = E.m_DefaultTextureRef;
-
-                T.m_Index = E.m_Index;
+                T.m_TexureRef = E.m_TextureRef;
             }
 
             displayProgressBar("Compiling Assigning Textures", 1.0f);
@@ -57,18 +88,18 @@ namespace xmaterial_instance_compiler
             //
             displayProgressBar("Compiling Constructing data file", 0.0f);
             xmaterial_instance::data_file DataFile;
-            DataFile.m_MaterialRef          = Descriptor.m_MaterialRef;
-            DataFile.m_pDefaultTextureList  = Textures.get();
-            DataFile.m_nDefaultTexturesList = static_cast<std::uint8_t>(Descriptor.m_lTextures.size());
+            DataFile.m_MaterialRef   = Descriptor.m_MaterialRef;
+            DataFile.m_pTextureList  = Textures.get();
+            DataFile.m_nTexturesList = static_cast<std::uint8_t>(Descriptor.m_lFinalTextures.size());
             displayProgressBar("Compiling Constructing data file", 1.0f);
 
             //
             // Add the dependencies
             //
-            for (auto& E : Descriptor.m_lTextures)
+            m_Dependencies.m_Resources.push_back(Descriptor.m_MaterialRef);
+            for (auto& E : Descriptor.m_lFinalTextures)
             {
                 if (not E.m_TextureRef.empty()) m_Dependencies.m_Resources.push_back(E.m_TextureRef);
-                else                            m_Dependencies.m_Resources.push_back(E.m_DefaultTextureRef);
             }
 
             //

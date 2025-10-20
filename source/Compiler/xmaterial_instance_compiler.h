@@ -11,8 +11,6 @@ namespace xmaterial_instance_compiler
     , FAILURE
     };
 
-    constexpr static auto type_guid_v = xresource::type_guid("Material Instance");
-
     struct instance : xresource_pipeline::compiler::base
     {
         static std::unique_ptr<instance> Create(void);

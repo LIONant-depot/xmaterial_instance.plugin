@@ -4,20 +4,20 @@
 int main(int argc, const char* argv[])
 {
     //for debug purpose
-    if constexpr (false)
+    if constexpr (!false)
     {
         static const char* pDebugArgs[] =
-        { "D:\\LIONant\\xGPU\\dependencies\\xresource_pipeline_example.lion_project\\Cache\\Plugins\\xmaterial.plugin\\Build\\xmaterial_compiler.vs2022\\Release\\xmaterial_compiler.exe" 
+        { "compiler location" 
         , "-PROJECT"
-        , "D:\\LIONant\\xGPU\\dependencies\\xresource_pipeline_example.lion_project" 
+        , "D:\\LIONant\\xGPU\\bin_dependencies\\xresource_pipeline_example.lion_project" 
         , "-OPTIMIZATION"
         , "O1"
         , "-DEBUG"
         , "D0"
         , "-DESCRIPTOR"
-        , "Descriptors\\Material\\03\\40\\39C2185971104003.desc" 
+        , "Descriptors\\MaterialInstance\\05\\80\\92AE485F322C8005.desc" 
         , "-OUTPUT"
-        , "D:\\LIONant\\xGPU\\dependencies\\xresource_pipeline_example.lion_project\\Cache\\Resources\\Platforms\\WINDOWS"
+        , "D:\\LIONant\\xGPU\\bin_dependencies\\xresource_pipeline_example.lion_project\\Cache\\Resources\\Platforms\\WINDOWS"
         };
 
         argv = pDebugArgs;

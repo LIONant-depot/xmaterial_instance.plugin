@@ -3,14 +3,6 @@ project(xmaterial_instance_compiler LANGUAGES C CXX)
 set(TARGET_PROJECT "xmaterial_instance_compiler")
 set(COMPONENT_REGISTRY "")
 
-
-# Create /MT code generation as we must match shaderc settings
-set(CMAKE_C_FLAGS_RELEASE "/MT")
-set(CMAKE_C_FLAGS_DEBUG "/MT")
-set(CMAKE_CXX_FLAGS_RELEASE "/MT")
-set(CMAKE_CXX_FLAGS_DEBUG "/MT")
-
-
 include(FetchContent)
 FetchContent_Declare(
   xcmake_tools

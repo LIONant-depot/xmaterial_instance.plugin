@@ -1,17 +1,12 @@
-#ifndef XMATERIAL_RUNTIME_H
-#define XMATERIAL_RUNTIME_H
+#ifndef XMATERIAL_INSTANCE_RUNTIME_H
+#define XMATERIAL_INSTANCE_RUNTIME_H
 
-#include "xmaterial_data_file.h"
+#include "xmaterial_instance_data_file.h"
 
-namespace xmaterial
+namespace xmaterial_instance
 {
     struct rt : data_file
     {
-        xgpu::shader& getShader()
-        {
-            static_assert(sizeof(m_RawData) == sizeof(xgpu::shader));
-            return reinterpret_cast<xgpu::shader&>(m_RawData);
-        }
     };
 }
 

@@ -16,7 +16,6 @@ namespace xmaterial_instance
         struct texture
         {
             xrsc::texture_ref   m_TexureRef;
-            int                 m_Index;
         };
 
         //-------------------------------------------------------------------------
@@ -26,8 +25,8 @@ namespace xmaterial_instance
 
 
         xrsc::material_ref  m_MaterialRef;
-        texture*            m_pDefaultTextureList;
-        std::uint8_t        m_nDefaultTexturesList;
+        texture*            m_pTextureList;
+        std::uint8_t        m_nTexturesList;
     };
 
     //-------------------------------------------------------------------------
@@ -50,8 +49,8 @@ namespace xserializer::io_functions
         xerr Err;
         false
         || (Err = Stream.Serialize(MaterialI.m_MaterialRef.m_Instance.m_Value))
-        || (Err = Stream.Serialize(MaterialI.m_pDefaultTextureList, MaterialI.m_nDefaultTexturesList))
-        || (Err = Stream.Serialize(MaterialI.m_nDefaultTexturesList))
+        || (Err = Stream.Serialize(MaterialI.m_pTextureList, MaterialI.m_nTexturesList))
+        || (Err = Stream.Serialize(MaterialI.m_nTexturesList))
         ;
 
         return Err;
@@ -64,7 +63,6 @@ namespace xserializer::io_functions
         xerr Err;
         false
         || (Err = Stream.Serialize(Texture.m_TexureRef.m_Instance.m_Value))
-        || (Err = Stream.Serialize(Texture.m_Index))
         ;
 
         return Err;

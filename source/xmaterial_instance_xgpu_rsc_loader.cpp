@@ -1,89 +1,71 @@
 
-#include "xmaterial_xgpu_rsc_loader.h"
-#include "xmaterial_runtime.h"
+#include "xmaterial_Instance_xgpu_rsc_loader.h"
+#include "xmaterial_instance_runtime.h"
 #include "dependencies/xserializer/source/xserializer.h"
 #include "dependencies/xresource_guid/source/bridges/xresource_xproperty_bridge.h"
 
 //
 // We will register the loader
 //
-inline static auto s_MaterialRegistrations = xresource::common_registrations<xrsc::material_type_guid_v>{};
+inline static auto s_MaterialRegistrations = xresource::common_registrations<xrsc::material_instance_type_guid_v>{};
 
 //------------------------------------------------------------------
 
-xresource::loader< xrsc::material_type_guid_v >::data_type* xresource::loader< xrsc::material_type_guid_v >::Load( xresource::mgr& Mgr, const full_guid& GUID )
+xresource::loader< xrsc::material_instance_type_guid_v >::data_type* xresource::loader< xrsc::material_instance_type_guid_v >::Load( xresource::mgr& Mgr, const full_guid& GUID )
 {
-    auto&           UserData    = Mgr.getUserData<resource_mgr_user_data>();
-    std::wstring    Path        = Mgr.getResourcePath(GUID, type_name_v);
-    xmaterial::rt*  pMaterial   = nullptr;
+    auto&                   UserData            = Mgr.getUserData<resource_mgr_user_data>();
+    std::wstring            Path                = Mgr.getResourcePath(GUID, type_name_v);
+    xmaterial_instance::rt* pMaterialInstance   = nullptr;
 
-    static_assert( sizeof(xmaterial::rt) == sizeof(xmaterial::data_file));
+    //static_assert( sizeof(xmaterial_instance::rt) == sizeof(xmaterial::data_file));
 
     // Load the xbitmap
     xserializer::stream Stream;
-    if (auto Err = Stream.Load(Path, pMaterial); Err)
+    if (auto Err = Stream.Load(Path, pMaterialInstance); Err)
     {
         assert(false);
     }
 
-    xgpu::shader::setup Setup
-    { .m_Type   = xgpu::shader::type::bit::FRAGMENT
-    , .m_Sharer = xgpu::shader::setup::raw_data{ std::span{reinterpret_cast<const int32_t*>(pMaterial->m_pShader), (std::size_t)pMaterial->m_ShaderSize } }
-    };
+    // Get the material
+    auto& Material = *Mgr.getResource( pMaterialInstance->m_MaterialRef );
 
-    // Must clear the memory before we can recycle it....
-    memset(&pMaterial->getShader(), 0, sizeof(pMaterial->getShader()) );
-
-    // OK time to create the shader officially
-    if (auto Err = UserData.m_Device.Create(pMaterial->getShader(), Setup); Err)
+    // Force load all the dependencies 
+    for (int i=0; i< pMaterialInstance->m_nTexturesList; ++i )
     {
-        assert(false);
-    }
+        // This must be a system texture... (Meaning the system need to provide this texture)
+        if (pMaterialInstance->m_pTextureList[i].m_TexureRef.empty()) continue;
 
-    // Link up all other dependencies
-    for (int i=0; i<pMaterial->m_nDefaultTextures; ++i )
-    {
-        if( pMaterial->m_pDefaultTextures[i].empty() )
+        assert(not pMaterialInstance->m_pTextureList[i].m_TexureRef.empty());
+        if ( auto p = Mgr.getResource(pMaterialInstance->m_pTextureList[i].m_TexureRef ); p == nullptr)
         {
-            // Should we try to set the default texture here...
-        }
-        else
-        {
-            if ( auto p = Mgr.getResource( pMaterial->m_pDefaultTextures[i] ); p == nullptr)
-            {
-                // Set default texture here as well?
-                assert(false);
-            }
+            // Set default texture here as well?
+            assert(false);
         }
     }
 
     // Return the texture
-    return pMaterial;
+    return pMaterialInstance;
 }
 
 //------------------------------------------------------------------
 
-void xresource::loader< xrsc::material_type_guid_v >::Destroy(xresource::mgr& Mgr, data_type&& Data, const full_guid& GUID)
+void xresource::loader< xrsc::material_instance_type_guid_v >::Destroy(xresource::mgr& Mgr, data_type&& Data, const full_guid& GUID)
 {
     auto& UserData = Mgr.getUserData<resource_mgr_user_data>();
+
+    // Release reference to the material
+    Mgr.ReleaseRef(Data.m_MaterialRef);
 
     //
     // Free up dependencies
     //
-    for (int i = 0; i < Data.m_nDefaultTextures; ++i)
+    for (int i = 0; i < Data.m_nTexturesList; ++i)
     {
-        if (Data.m_pDefaultTextures[i].empty() == false)
+        if (Data.m_pTextureList[i].m_TexureRef.empty() == false)
         {
-            Mgr.ReleaseRef( Data.m_pDefaultTextures[i] );
+            Mgr.ReleaseRef( Data.m_pTextureList[i].m_TexureRef );
         }
     }
-
-    //
-    // Free up the shader
-    //
-
-    // This function should be destorying the shader
-  //  UserData.m_Device.Destroy( std::move(Data.getShader()) );
 
     //
     // Finally Free the user data
