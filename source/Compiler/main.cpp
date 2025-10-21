@@ -4,12 +4,12 @@
 int main(int argc, const char* argv[])
 {
     //for debug purpose
-    if constexpr (!false)
+    if constexpr (false)
     {
         static const char* pDebugArgs[] =
         { "compiler location" 
         , "-PROJECT"
-        , "D:\\LIONant\\xGPU\\bin_dependencies\\xresource_pipeline_example.lion_project" 
+        , "D:\\LIONant\\xGPU\\bin_dependencies\\xresource_pipeline_example.lionprj" 
         , "-OPTIMIZATION"
         , "O1"
         , "-DEBUG"
