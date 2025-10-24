@@ -43,7 +43,7 @@ namespace xmaterial_instance
 namespace xserializer::io_functions
 {
     //-------------------------------------------------------------------------
-    template<>
+    template<> inline
     xerr SerializeIO<xmaterial_instance::data_file>(xserializer::stream& Stream, const xmaterial_instance::data_file& MaterialI) noexcept
     {
         xerr Err;
@@ -57,7 +57,7 @@ namespace xserializer::io_functions
     }
 
     //-------------------------------------------------------------------------
-    template<>
+    template<> inline
     xerr SerializeIO<xmaterial_instance::data_file::texture>(xserializer::stream& Stream, const xmaterial_instance::data_file::texture& Texture) noexcept
     {
         xerr Err;

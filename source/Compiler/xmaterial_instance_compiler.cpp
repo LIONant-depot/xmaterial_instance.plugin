@@ -40,27 +40,17 @@ namespace xmaterial_instance_compiler
             auto& Descriptor = *reinterpret_cast<xmaterial_instance::descriptor*>(BaseDescriptor.get());
 
             //
-            //  make sure that we have something valid
+            // Set the user textures into the final texture slots
             //
-            if ( Descriptor.m_MaterialRef.empty() )
-                return xerr::create_f<state, "Material Instance without a material reference">();
-
-            //
-            // Set all the final textures
-            //
-            if (Descriptor.m_lTextureDefaults.size() != Descriptor.m_lTextures.size())
-                return xerr::create_f<state, "Default and Set Textures size do not match">();
-
-            for (auto& E : Descriptor.m_lTextureDefaults)
             {
-                const auto Index = static_cast<int>(&E - Descriptor.m_lTextureDefaults.data());
-                if (Descriptor.m_lTextures[Index].empty())
+                // Now let us search each texture in the up to date material-descriptor
+                for (auto& E : Descriptor.m_lTextureDefaults)
                 {
-                    xerr::LogMessage<state::FAILURE>(std::format("Forgot to assign a texture {} With Index {} Entry Number {}", E.m_Name, E.m_Index, Index));
-                    return xerr::create_f< state, "You forgot to assign a texture">();
-                }
+                    const auto Index = static_cast<int>(&E - Descriptor.m_lTextureDefaults.data());
 
-                Descriptor.m_lFinalTextures[E.m_Index].m_TextureRef = Descriptor.m_lTextures[Index];
+                    // Set final textures
+                    Descriptor.m_lFinalTextures[E.m_Index].m_TextureRef = Descriptor.m_lTextures[Index];
+                }
             }
 
             //
@@ -100,6 +90,14 @@ namespace xmaterial_instance_compiler
             for (auto& E : Descriptor.m_lFinalTextures)
             {
                 if (not E.m_TextureRef.empty()) m_Dependencies.m_Resources.push_back(E.m_TextureRef);
+            }
+
+            {
+                std::wstring MaterialRefDescriptorPath;
+                if (auto Err = Descriptor.getTemplatePathFromDescriptorPath(MaterialRefDescriptorPath, DescriptorFileName); Err)
+                    return Err;
+
+                m_Dependencies.m_Assets.push_back(MaterialRefDescriptorPath.substr(m_ProjectPaths.m_Project.length()+1));
             }
 
             //
