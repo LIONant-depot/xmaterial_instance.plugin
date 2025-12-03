@@ -23,6 +23,7 @@ namespace xmaterial_instance
         inline          data_file       (void)                          noexcept = default;
         inline          data_file       (xserializer::stream& Steaming) noexcept;
 
+        inline std::span<texture>         getTextures(void) { return { m_pTextureList, (std::size_t)m_nTexturesList }; }
 
         xrsc::material_ref  m_MaterialRef;
         texture*            m_pTextureList;

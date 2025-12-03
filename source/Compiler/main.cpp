@@ -9,15 +9,15 @@ int main(int argc, const char* argv[])
         static const char* pDebugArgs[] =
         { "compiler location" 
         , "-PROJECT"
-        , "D:\\LIONant\\xGPU\\bin_dependencies\\xresource_pipeline_example.lionprj" 
+        , "D:\\xgpu_test\\xGPU\\example.lionprj"  
         , "-OPTIMIZATION"
         , "O1"
         , "-DEBUG"
         , "D0"
         , "-DESCRIPTOR"
-        , "Descriptors\\MaterialInstance\\05\\80\\92AE485F322C8005.desc" 
+        , "Descriptors\\MaterialInstance\\03\\C0\\88AFF86EA67EC003.desc" 
         , "-OUTPUT"
-        , "D:\\LIONant\\xGPU\\bin_dependencies\\xresource_pipeline_example.lion_project\\Cache\\Resources\\Platforms\\WINDOWS"
+        , "D:\\xgpu_test\\xGPU\\example.lionprj\\Cache\\Resources\\Platforms\\WINDOWS" 
         };
 
         argv = pDebugArgs;
