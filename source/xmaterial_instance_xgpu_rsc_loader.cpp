@@ -7,7 +7,7 @@
 //
 // We will register the loader
 //
-inline static auto s_MaterialRegistrations = xresource::common_registrations<xrsc::material_instance_type_guid_v>{};
+inline static auto s_MaterialInstanceRegistrations = xresource::common_registrations<xrsc::material_instance_type_guid_v>{};
 
 //------------------------------------------------------------------
 
