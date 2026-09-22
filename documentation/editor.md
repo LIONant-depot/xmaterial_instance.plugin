@@ -20,6 +20,7 @@ Run as `<resource name>\<Command>`. Paths and values are base64.
 |---|---|
 | `SetMaterial -Material hexguid [-Before hexguid]` | makes the instance from another (compiled) material; its textures become the defaults (undoable) |
 | `ListProperties [-Filter]`, `SetProperty -Path -Value [-Before]`, `SnapshotEdit` | descriptor properties (undoable); a texture slot is `.../Textures[G:n]` |
+| `ListOp -Path -Op Insert\|Delete\|Move -Index n [-ToIndex n]` | inserts, deletes or moves an element in the middle of a 1D array property (undoable); ordinal keys only |
 | `Save`, `Compile`, `Undo`, `Redo` | |
 | `CompileStatus [-Lines n]` | how the last compile went: state, unsaved changes, validation errors, the end of the log |
 | `SetPreviewMesh [-Model name]` | the mesh the instance is shown on (no name lists them) |
