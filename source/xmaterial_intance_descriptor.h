@@ -41,7 +41,7 @@ namespace xmaterial_instance
         XPROPERTY_VDEF
         ( "material_instance_descriptor",   descriptor
         , obj_member<"MaterialRef",         &descriptor::m_MaterialRef >
-        , obj_member<"Textures",            &descriptor::m_lTextures, member_ui_open<true>>
+        , obj_member<"Textures",            &descriptor::m_lTextures, member_ui_open<true>, member_array_size_readonly<true> >
         , obj_member<"TextureDefaults",     &descriptor::m_lTextureDefaults, member_flags<flags::DONT_SHOW>>
         , obj_member<"FinalTextures",       &descriptor::m_lFinalTextures, member_flags<flags::DONT_SHOW>>
         )

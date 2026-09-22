@@ -100,12 +100,13 @@ namespace xmaterial_instance_editor
     {
         set_material_cmd                m_SetMaterial;
         xeditor::mesh_preview           m_Preview;
+        xeditor::mesh_preview_cmds      m_PreviewCmds;
         xeditor::texture_thumbnails     m_Thumbnails;
         xrsc::material_instance_ref     m_InstanceRef;
         std::function<void(xproperty::inspector&, const xproperty::type::object&, void*, std::string_view, const xproperty::any&, ImGuiTreeNodeFlags, const char*, bool&)> m_TextureRowLabel;
 
         session(xresource::full_guid Guid, e10::library::guid LibraryGuid, xgpu::device* pDevice) noexcept
-            : descriptor_editor("Material Instance", Guid, LibraryGuid, pDevice), m_SetMaterial(m_Undo, m_Document)
+            : descriptor_editor("Material Instance", Guid, LibraryGuid, pDevice), m_SetMaterial(m_Undo, m_Document), m_PreviewCmds(m_Undo, m_Preview)
         {
             m_Thumbnails.Wire(m_DescriptorInspector.m_Inspector);
             WireTextureRowLabels();
