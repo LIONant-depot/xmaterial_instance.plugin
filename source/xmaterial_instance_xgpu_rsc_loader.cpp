@@ -29,21 +29,25 @@ xresource::loader< xrsc::material_instance_type_guid_v >::data_type* xresource::
         return nullptr;
     }
 
-    // Get the material
-    auto& Material = *Mgr.getResource( pMaterialInstance->m_MaterialRef );
+    // Force-load the material, same recoverable-if-missing handling as its own loader (a broken/
+    // uncompiled Material dependency is not this material instance's fault). Was an unconditional
+    // dereference of whatever getResource() returned - worse than the assert(false) pattern fixed
+    // elsewhere this session, since it crashed even in Release with no diagnostic at all. The
+    // resolved pointer was never actually used past this point (every consumer re-resolves
+    // m_MaterialRef itself when it needs it - see xgeom_static_editor_preview.h's RebuildMaterials,
+    // e.g.), so this only ever needed to trigger the load, not hold onto the result.
+    (void)Mgr.getResource(pMaterialInstance->m_MaterialRef);
 
-    // Force load all the dependencies 
+    // Force load all the dependencies. A texture that fails to resolve (missing/uncompiled itself) is
+    // the same expected, recoverable case as the geometry loaders' own material-instance resolution -
+    // this slot just stays unresolved; every consumer already renders a fallback rather than assuming
+    // every texture slot resolved.
     for (int i=0; i< pMaterialInstance->m_nTexturesList; ++i )
     {
         // This must be a system texture... (Meaning the system need to provide this texture)
         if (pMaterialInstance->m_pTextureList[i].m_TexureRef.empty()) continue;
 
-        assert(not pMaterialInstance->m_pTextureList[i].m_TexureRef.empty());
-        if ( auto p = Mgr.getResource(pMaterialInstance->m_pTextureList[i].m_TexureRef ); p == nullptr)
-        {
-            // Set default texture here as well?
-            assert(false);
-        }
+        (void)Mgr.getResource(pMaterialInstance->m_pTextureList[i].m_TexureRef);
     }
 
     // Return the texture
