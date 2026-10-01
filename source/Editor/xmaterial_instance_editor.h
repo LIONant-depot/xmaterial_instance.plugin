@@ -8,8 +8,8 @@
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
 #include "source/Tools/Editor/xeditor_mesh_preview.h"
 #include "source/Tools/Editor/xeditor_texture_thumbnails.h"
-#include "dependencies/xresource_pipeline_v2/source/editor/E10_CommandGuids.h"
-#include "dependencies/xresource_pipeline_v2/source/editor/E10_Resources.h"
+#include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_command_guids.h"
+#include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_intance_descriptor.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_runtime.h"
@@ -50,7 +50,7 @@ namespace xmaterial_instance_editor
         // The material's template of textures, in the compiler's log: streamed into the descriptor, then the instance's textures start from the defaults.
         static std::string LoadTemplate(xmaterial_instance::descriptor& D, xrsc::material_ref Material) noexcept
         {
-            const auto Path = std::format(L"{}/Cache/Resources/Logs/Material/{:02X}/{:02X}/{:X}.log/MaterialInstance.txt", e10::g_LibMgr.m_ProjectPath
+            const auto Path = std::format(L"{}/Cache/Resources/Logs/Material/{:02X}/{:02X}/{:X}.log/MaterialInstance.txt", xresource_editor::g_LibMgr.m_ProjectPath
                 , Material.m_Instance.m_Value & 0xff, (Material.m_Instance.m_Value & 0xff00) >> 8, Material.m_Instance.m_Value);
 
             xtextfile::stream File;
@@ -105,7 +105,7 @@ namespace xmaterial_instance_editor
         xrsc::material_instance_ref     m_InstanceRef;
         std::function<void(xproperty::inspector&, const xproperty::type::object&, void*, std::string_view, const xproperty::any&, ImGuiTreeNodeFlags, const char*, bool&)> m_TextureRowLabel;
 
-        session(xresource::full_guid Guid, e10::library::guid LibraryGuid, xgpu::device* pDevice) noexcept
+        session(xresource::full_guid Guid, xresource_editor::library::guid LibraryGuid, xgpu::device* pDevice) noexcept
             : descriptor_editor("Material Instance", Guid, LibraryGuid, pDevice), m_SetMaterial(m_Undo, m_Document), m_PreviewCmds(m_Undo, m_Preview)
         {
             m_Thumbnails.Wire(m_DescriptorInspector.m_Inspector);
@@ -204,7 +204,7 @@ namespace xmaterial_instance_editor
 
     inline const xeditor::auto_register_resource_editor g_Registration
     { xrsc::material_instance_type_guid_v
-    , [](xresource::full_guid Guid, e10::library::guid LibraryGuid, xgpu::device* pDevice) -> std::unique_ptr<xeditor::resource_editor>
+    , [](xresource::full_guid Guid, xresource_editor::library::guid LibraryGuid, xgpu::device* pDevice) -> std::unique_ptr<xeditor::resource_editor>
       { return std::make_unique<session>(Guid, LibraryGuid, pDevice); }
     };
 }
