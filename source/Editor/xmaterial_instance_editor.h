@@ -164,8 +164,8 @@ namespace xmaterial_instance_editor
                             if (ImGui::Button(">"))
                             {
                                 const auto Default = pDesc->m_lFinalTextures[pDesc->m_lTextureDefaults[Index].m_Index].m_TextureRef;
-                                xeditor::Run(m_Undo, std::format("SetProperty -Path {} -Value {}", xeditor::Base64Encode(std::string(Path))
-                                    , xeditor::Base64Encode(std::format("{:X}, {:X}", Default.m_Instance.m_Value, xrsc::texture_type_guid_v.m_Value))));
+                                xeditor::Run(m_Undo, std::format("SetProperty -Path {} -Value {}", xeditor::Quote(std::string(Path))
+                                    , xeditor::Quote(std::format("{:X}, {:X}", Default.m_Instance.m_Value, xrsc::texture_type_guid_v.m_Value))));
                             }
                             ImGui::SameLine();
                         }

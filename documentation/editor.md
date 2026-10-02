@@ -14,7 +14,7 @@ preview is `xeditor::mesh_preview` and the texture thumbnails `xeditor::texture_
 
 ## Commands
 
-Run as `<resource name>\<Command>`. Paths and values are base64.
+Run as `<resource name>\<Command>`. Paths and values are text, in quotes.
 
 | Command | |
 |---|---|
