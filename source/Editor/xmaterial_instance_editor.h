@@ -7,7 +7,6 @@
 // and open editors through xeditor::open_resource_editors.
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
 #include "source/Tools/Editor/xeditor_mesh_preview.h"
-#include "source/Tools/Editor/xeditor_texture_thumbnails.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_command_guids.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_intance_descriptor.h"
@@ -101,14 +100,13 @@ namespace xmaterial_instance_editor
         set_material_cmd                m_SetMaterial;
         xeditor::mesh_preview           m_Preview;
         xeditor::mesh_preview_cmds      m_PreviewCmds;
-        xeditor::texture_thumbnails     m_Thumbnails;
         xrsc::material_instance_ref     m_InstanceRef;
         std::function<void(xproperty::inspector&, const xproperty::type::object&, void*, std::string_view, const xproperty::any&, ImGuiTreeNodeFlags, const char*, bool&)> m_TextureRowLabel;
 
         session(xresource::full_guid Guid, xresource_editor::library::guid LibraryGuid, xgpu::device* pDevice) noexcept
             : descriptor_editor("Material Instance", Guid, LibraryGuid, pDevice), m_SetMaterial(m_Undo, m_Document), m_PreviewCmds(m_Undo, m_Preview)
         {
-            m_Thumbnails.Wire(m_DescriptorInspector.m_Inspector);
+            xresource_editor::WireResourcePickerCallbacks(m_DescriptorInspector.m_Inspector);
             WireTextureRowLabels();
 
             AddPanel("Material Instance Preview", dock::center, [this] { m_Preview.Render(); });
@@ -133,10 +131,10 @@ namespace xmaterial_instance_editor
         // A texture slot is labelled with what it is for; one that is not the material's default is marked, and the mark resets it.
         void WireTextureRowLabels() noexcept
         {
-            m_TextureRowLabel = [this](xproperty::inspector&, const xproperty::type::object&, void* pInstance, std::string_view Path, const xproperty::any&, ImGuiTreeNodeFlags Flags, const char* pName, bool& Open)
+            m_TextureRowLabel = [this](xproperty::inspector& Inspector, const xproperty::type::object&, void* pInstance, std::string_view Path, const xproperty::any&, ImGuiTreeNodeFlags Flags, const char* pName, bool& Open)
             {
-                // The slot's row is as tall as the texture button beside it
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 18.0f));
+                // The slot's row is as tall as the reference beside it
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, xproperty::inspector::ResourceRowFramePadding(Inspector.m_CurrentProperty.m_Flags.m_bSmallResource));
                 std::string NewName;
                 bool bOverride = false;
 
