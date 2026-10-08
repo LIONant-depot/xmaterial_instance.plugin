@@ -46,7 +46,7 @@ namespace xmaterial_instance
         , obj_member<"FinalTextures",       &descriptor::m_lFinalTextures, member_flags<flags::DONT_SHOW>>
         )
 
-        void SetupFromSource(std::string_view FileName)
+        void SetupFromSource(std::string_view FileName) override
         {
             
         }
