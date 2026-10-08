@@ -3,8 +3,8 @@
 
 #include "dependencies/xresource_pipeline_v2/source/xresource_pipeline.h"
 #include "dependencies/xproperty/source/xcore/my_properties.h"
-#include "Plugins/xtexture.plugin/source/xtexture_xgpu_rsc_loader.h"
-#include "Plugins/xmaterial.plugin/source/xmaterial_xgpu_rsc_loader.h"
+#include "plugins/xtexture.plugin/source/xtexture_xgpu_rsc_loader.h"
+#include "plugins/xmaterial.plugin/source/xmaterial_xgpu_rsc_loader.h"
 
 namespace xmaterial_instance
 {

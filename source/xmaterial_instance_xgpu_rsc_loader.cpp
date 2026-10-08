@@ -1,5 +1,5 @@
 
-#include "xmaterial_Instance_xgpu_rsc_loader.h"
+#include "xmaterial_instance_xgpu_rsc_loader.h"
 #include "xmaterial_instance_runtime.h"
 #include "dependencies/xserializer/source/xserializer.h"
 #include "dependencies/xresource_guid/source/bridges/xresource_xproperty_bridge.h"
