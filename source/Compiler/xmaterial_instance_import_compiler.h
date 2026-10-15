@@ -11,7 +11,7 @@
 //                      shininess, emission from the emissive color
 // Every resource is written in Descriptors only when its text changed, so recompiling the geometry does not recompile its textures. What exists already
 // is loaded and given only what the generator owns (xresource_pipeline_virtual.h): of a Material Instance the base material and the slots that still point
-// at a texture the geometry made (a slot the user pointed at another texture is theirs), of a Texture its input (the file or the mix); the rest is the user's.
+// at a texture the geometry made (a slot the user pointed at another texture is theirs), of a Texture nothing (its guid is made from its input: the same texture has the same input, so what it holds is the user's); the rest is the user's.
 // The includer defines STB_IMAGE_IMPLEMENTATION once (the alpha and size checks read the images).
 #include "dependencies/xresource_pipeline_v2/source/xresource_pipeline_virtual.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_import.h"
@@ -173,7 +173,8 @@ namespace xmaterial_instance::import
             xtexture_rsc::descriptor Desc;
             Desc.m_UWrap = Desc.m_VWrap = xtexture_rsc::wrap_type::WRAP;
             Setup(Desc);
-            xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Desc, [](xtexture_rsc::descriptor& Existing, const xtexture_rsc::descriptor& Fresh) { Existing.m_InputVariant = Fresh.m_InputVariant; });
+            if (!xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Desc, [](xtexture_rsc::descriptor&, const xtexture_rsc::descriptor&) {}))        // a texture has its guid from what it is made of: the same guid has the same input, so what it holds now is the user's
+                m_Warning(std::format("Import Materials: the descriptor of the texture {} could not be read: it is left as it is", Name));
             xresource_pipeline::virtual_rsc::EmitInfo(Folder, Ref, Name, Parent);
 
             m_Dependencies.m_VirtualResources.push_back(Ref);
@@ -279,7 +280,7 @@ namespace xmaterial_instance::import
                     Albedo = Texture(xstrtool::To(Diffuse + L"|" + Opacity), Stem(Diffuse) + " (color, cut out)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                     {
                         D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
-                        D.m_Compression          = xtexture_rsc::compression_format::RGBA_BC7;
+                        D.m_Compression          = m_Settings.AlbedoAlpha();
                         D.m_bFillAveColorByAlpha = true;
                         D.m_InputVariant         = Mixed({ Channel(Diffuse, from::RGB, to::RGB), Channel(Opacity, from::R, to::A) });
                     });
@@ -291,7 +292,7 @@ namespace xmaterial_instance::import
                     Albedo = Texture(xstrtool::To(Diffuse + L"|alpha"), Stem(Diffuse) + " (color and alpha)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                     {
                         D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
-                        D.m_Compression          = xtexture_rsc::compression_format::RGBA_BC7;
+                        D.m_Compression          = m_Settings.AlbedoAlpha();
                         D.m_bFillAveColorByAlpha = true;
                         D.m_InputVariant         = Single(Diffuse);
                     });
@@ -301,7 +302,7 @@ namespace xmaterial_instance::import
                     Albedo = Texture(xstrtool::To(Diffuse), Stem(Diffuse) + " (color)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                     {
                         D.m_UsageType    = xtexture_rsc::usage_type::COLOR;
-                        D.m_Compression  = xtexture_rsc::compression_format::RGB_BC1;
+                        D.m_Compression  = m_Settings.Albedo();
                         D.m_InputVariant = Single(Diffuse);
                     });
                 }
@@ -326,7 +327,7 @@ namespace xmaterial_instance::import
                 ? Texture(xstrtool::To(Normal), Stem(Normal) + " (normal)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                 {
                     D.m_UsageType    = xtexture_rsc::usage_type::TANGENT_NORMAL;
-                    D.m_Compression  = xtexture_rsc::compression_format::RG_BC5;
+                    D.m_Compression  = m_Settings.Normal();
                     D.m_bSRGB        = false;
                     D.m_InputVariant = Single(Normal);
                 })
@@ -373,7 +374,7 @@ namespace xmaterial_instance::import
             const auto ORME = Texture(Key, (bConstantORME ? M.m_Name : Stem(Size)) + " (ORME)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
             {
                 D.m_UsageType     = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
-                D.m_Compression   = bConstantORME ? xtexture_rsc::compression_format::RGBA_UNCOMPRESSED : xtexture_rsc::compression_format::RGBA_BC7;
+                D.m_Compression   = bConstantORME ? xtexture_rsc::compression_format::RGBA_UNCOMPRESSED : m_Settings.ORME();
                 D.m_bSRGB         = false;
                 D.m_bGenerateMips = !bConstantORME;
                 D.m_InputVariant  = Mixed(std::move(Mixes));
@@ -401,7 +402,7 @@ namespace xmaterial_instance::import
             const auto Folder = DescriptorFolder("MaterialInstance", InstanceGuid.m_Instance.m_Value);
             std::error_code Ec;
             std::filesystem::create_directories(Folder, Ec);
-            xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Instance, [&](xmaterial_instance::descriptor& Existing, const xmaterial_instance::descriptor& Fresh)
+            if (!xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Instance, [&](xmaterial_instance::descriptor& Existing, const xmaterial_instance::descriptor& Fresh)
             {
                 // The generator's: the base material and the slots that still point at what the geometry made. A slot the user pointed at another texture stays.
                 std::vector<xrsc::texture_ref> Slots = Fresh.m_lTextures;
@@ -418,7 +419,8 @@ namespace xmaterial_instance::import
                 Existing.m_lTextureDefaults = Fresh.m_lTextureDefaults;
                 Existing.m_lFinalTextures   = Fresh.m_lFinalTextures;
                 Existing.m_lTextures        = std::move(Slots);
-            });
+            }))
+                m_Warning(std::format("Import Materials: the descriptor of the instance {} could not be read: it is left as it is", M.m_Name));
             xresource_pipeline::virtual_rsc::EmitInfo(Folder, InstanceGuid, M.m_Name, m_Owner);
             m_Dependencies.m_VirtualResources.push_back(InstanceGuid);
         }

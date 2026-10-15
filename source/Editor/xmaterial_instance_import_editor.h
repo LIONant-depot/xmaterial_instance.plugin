@@ -12,6 +12,7 @@
 //      SetImportMaterials -On true|false           the import on or off: the slots nobody assigned take, or give back, the imported instances
 //      DuplicateImportedMaterial -Slot i -Instance hex
 //      RemoveUnusedImportedResources               takes away what the import made and the model no longer needs (xeditor_virtual_resources.h)
+//      ApplyImportCompressions                     sets the compression of the generated textures to the ImportMaterials settings (undoable)
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
 #include "source/Tools/Editor/xeditor_virtual_resources.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_commands_assets.h"
@@ -19,6 +20,8 @@
 
 #include <charconv>
 #include <filesystem>
+#include <fstream>
+#include <optional>
 
 namespace xmaterial_instance::import::editor
 {
@@ -174,6 +177,105 @@ namespace xmaterial_instance::import::editor
     };
 
     //--------------------------------------------------------------------------------------------
+    // ApplyImportCompressions: the compression of a texture is chosen when it is made (settings::m_AlbedoCompression, ...) and is the user's after that.
+    // This sets the textures the geometry made to the compressions of the settings (what the user chose for them is overwritten): by what they hold, a color
+    // map, a color map that cuts out, a normal map, the ORME. Textures of a constant are left uncompressed. Undo writes the descriptors back.
+    //--------------------------------------------------------------------------------------------
+    struct apply_compressions_cmd : xundo::command_base
+    {
+        xeditor::descriptor_document&   m_Doc;
+        get_slots_fn                    m_GetSlots;
+
+        apply_compressions_cmd(xundo::system& System, xeditor::descriptor_document& Doc, get_slots_fn GetSlots) noexcept
+            : command_base(System, "ApplyImportCompressions", nullptr), m_Doc(Doc), m_GetSlots(GetSlots) { RegisterArguments(); }
+
+        const char* getCommandHelp() const noexcept override { return "Sets the compression of the generated textures to the ones of the ImportMaterials settings, overwriting what was chosen for them (undoable). Usage: ApplyImportCompressions"; }
+        void RegisterArguments() noexcept override {}
+
+        // What the settings say for this texture: none for a texture that is not one of the roles (or made of constants)
+        static std::optional<xtexture_rsc::compression_format> Wanted(const settings& S, const xtexture_rsc::descriptor& D) noexcept
+        {
+            if (const auto* pMix = std::get_if<xtexture_rsc::mix_source>(&D.m_InputVariant))
+            {
+                bool bConstant = true;
+                for (auto& M : pMix->m_Inputs) bConstant = bConstant && M.m_CopyFrom == xtexture_rsc::compositing_from::CUSTOM_CONSTANT;
+                if (bConstant) return std::nullopt;
+            }
+            switch (D.m_UsageType)
+            {
+            case xtexture_rsc::usage_type::COLOR:           return S.Albedo();
+            case xtexture_rsc::usage_type::TANGENT_NORMAL:  return S.Normal();
+            case xtexture_rsc::usage_type::COLOR_AND_ALPHA: return D.m_bSRGB ? S.AlbedoAlpha() : S.ORME();      // the ORME is linear
+            default:                                        return std::nullopt;
+            }
+        }
+
+        struct change { std::wstring m_Path; std::string m_Before; };
+
+        // The descriptors that would change, with their text now
+        std::vector<change> Changes(std::vector<std::pair<std::wstring, xtexture_rsc::compression_format>>* pTargets = nullptr) const noexcept
+        {
+            std::vector<change> List;
+            if (!m_Doc.isLoaded()) return List;
+            const auto S = m_GetSlots(*m_Doc.m_pDescriptor);
+            for (auto& Guid : xresource_editor::g_LibMgr.VirtualDescendantsOf(m_Doc.m_LibraryGuid, m_Doc.m_Guid))
+            {
+                if (Guid.m_Type != xrsc::texture_type_guid_v) continue;
+                std::wstring InfoPath;
+                xresource_editor::g_LibMgr.getNodeInfo(m_Doc.m_LibraryGuid, Guid, [&](xresource_editor::library_db::info_node& Node) { InfoPath = Node.m_Path; });
+                if (InfoPath.empty()) continue;
+
+                const auto Path = (std::filesystem::path(InfoPath).parent_path() / L"Descriptor.txt").wstring();
+                xtexture_rsc::descriptor D;
+                xproperty::settings::context Context;
+                if (D.Serialize(true, Path, Context)) continue;
+                const auto Want = Wanted(*S.m_pSettings, D);
+                if (!Want || *Want == D.m_Compression) continue;
+
+                std::ifstream In(std::filesystem::path(Path), std::ios::binary);
+                List.push_back({ Path, std::string(std::istreambuf_iterator<char>(In), {}) });
+                if (pTargets) pTargets->push_back({ Path, *Want });
+            }
+            return List;
+        }
+
+        std::string Redo() noexcept override
+        {
+            std::vector<std::pair<std::wstring, xtexture_rsc::compression_format>> Targets;
+            if (Changes(&Targets).empty()) return "ApplyImportCompressions: the generated textures already have these compressions";
+            for (auto& [Path, Format] : Targets)
+            {
+                xtexture_rsc::descriptor D;
+                xproperty::settings::context Context;
+                if (D.Serialize(true, Path, Context)) continue;
+                D.m_Compression = Format;
+                xproperty::settings::context Out;
+                D.Serialize(false, Path, Out);                  // the file watcher compiles the texture again
+            }
+            return {};
+        }
+
+        void BackupCurrenState(xundo::undo_file& File) noexcept override
+        {
+            const auto List = Changes();
+            xeditor::WriteString(File, std::to_string(List.size()));
+            for (auto& C : List) { xeditor::WriteString(File, xstrtool::To(C.m_Path)); xeditor::WriteString(File, C.m_Before); }
+        }
+
+        void Undo(xundo::undo_file& File) noexcept override
+        {
+            const int Count = std::atoi(xeditor::ReadString(File).c_str());
+            for (int i = 0; i < Count; ++i)
+            {
+                const auto Path = std::filesystem::path(xstrtool::To(xeditor::ReadString(File)));
+                const auto Text = xeditor::ReadString(File);
+                std::ofstream Out(Path, std::ios::binary | std::ios::trunc);
+                Out.write(Text.data(), static_cast<std::streamsize>(Text.size()));
+            }
+        }
+    };
+
+    //--------------------------------------------------------------------------------------------
     // What a geometry editor holds: the commands, and the drawing of a slot row's override arrow and context menu
     //--------------------------------------------------------------------------------------------
     struct session_part
@@ -184,13 +286,32 @@ namespace xmaterial_instance::import::editor
         set_import_cmd                  m_SetImport;
         duplicate_cmd                   m_Duplicate;
         xeditor::virtual_resources::remove_unused_cmd   m_RemoveUnused;
+        apply_compressions_cmd                          m_ApplyCompressions;
+        bool                                            m_bAskApply = false;
         xeditor::virtual_resources::unused_button       m_UnusedButton;
 
         session_part(xundo::system& Undo, xeditor::descriptor_document& Doc, get_slots_fn GetSlots) noexcept
-            : m_Doc(Doc), m_Undo(Undo), m_GetSlots(GetSlots), m_SetImport(Undo, Doc, GetSlots), m_Duplicate(Undo, Doc, GetSlots), m_RemoveUnused(Undo, Doc) {}
+            : m_Doc(Doc), m_Undo(Undo), m_GetSlots(GetSlots), m_SetImport(Undo, Doc, GetSlots), m_Duplicate(Undo, Doc, GetSlots), m_RemoveUnused(Undo, Doc), m_ApplyCompressions(Undo, Doc, GetSlots) {}
 
         // Above the Description inspector: the button that removes what the import made and the model no longer needs
-        void DrawUnusedButton() noexcept { if (m_Doc.isLoaded()) m_UnusedButton.Draw(m_Undo, m_Doc); }
+        void DrawUnusedButton() noexcept
+        {
+            if (!m_Doc.isLoaded()) return;
+            m_UnusedButton.Draw(m_Undo, m_Doc);
+
+            // The textures made so far keep the compression they were made with: this puts the settings' on them (once in a while, so it is not checked every frame)
+            if (m_GetSlots(*m_Doc.m_pDescriptor).m_pSettings->m_bImport && ImGui::Button("Apply the import compressions to the generated textures###ApplyImportCompressions"))
+                ImGui::OpenPopup("Apply the compressions?###ApplyImportCompressionsPopup");
+            if (ImGui::BeginPopupModal("Apply the compressions?###ApplyImportCompressionsPopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::TextUnformatted("The generated textures take the compressions of the ImportMaterials settings.");
+                ImGui::TextUnformatted("What you chose for them is overwritten. This can be undone.");
+                if (ImGui::Button("Apply")) { xeditor::Run(m_Undo, "ApplyImportCompressions"); ImGui::CloseCurrentPopup(); }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
 
         // The checkbox is one command, not a property edit: the slots follow it
         bool OnCustomChange(const xproperty::ui::undo::cmd& Cmd) noexcept
