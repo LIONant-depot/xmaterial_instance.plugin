@@ -19,7 +19,7 @@ namespace xmaterial_instance::import
 
     struct settings
     {
-        bool                    m_bImport       = false;
+        bool                    m_bImport       = true;          // a new geometry imports the materials of its model
         xrsc::material_ref      m_Material      = { .m_Instance = { default_pbr_material_v } };
         xrsc::material_ref      m_AlphaTest     = { .m_Instance = { default_pbr_alpha_test_material_v } };
 
