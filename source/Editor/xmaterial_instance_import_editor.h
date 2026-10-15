@@ -11,7 +11,9 @@
 // Commands (all undoable):
 //      SetImportMaterials -On true|false           the import on or off: the slots nobody assigned take, or give back, the imported instances
 //      DuplicateImportedMaterial -Slot i -Instance hex
+//      RemoveUnusedImportedResources               takes away what the import made and the model no longer needs (xeditor_virtual_resources.h)
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
+#include "source/Tools/Editor/xeditor_virtual_resources.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_commands_assets.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_import.h"
 
@@ -129,7 +131,7 @@ namespace xmaterial_instance::import::editor
 
             const auto& Project  = xresource_editor::g_LibMgr.m_ProjectPath;
             const auto  Imported = InstanceRef(m_Doc.m_Guid.m_Instance, S.m_Names[Slot]);
-            const auto  Source   = DescriptorFolder(Project + L"\\Cache\\Descriptors", Imported.m_Instance.m_Value) + L"\\Descriptor.txt";
+            const auto  Source   = DescriptorFolder(Project + L"\\Descriptors", Imported.m_Instance.m_Value) + L"\\Descriptor.txt";
             std::error_code Ec;
             if (!std::filesystem::exists(Source, Ec)) return "DuplicateImportedMaterial: the imported instance is not there yet (compile the geometry)";
 
@@ -181,9 +183,14 @@ namespace xmaterial_instance::import::editor
         get_slots_fn                    m_GetSlots;
         set_import_cmd                  m_SetImport;
         duplicate_cmd                   m_Duplicate;
+        xeditor::virtual_resources::remove_unused_cmd   m_RemoveUnused;
+        xeditor::virtual_resources::unused_button       m_UnusedButton;
 
         session_part(xundo::system& Undo, xeditor::descriptor_document& Doc, get_slots_fn GetSlots) noexcept
-            : m_Doc(Doc), m_Undo(Undo), m_GetSlots(GetSlots), m_SetImport(Undo, Doc, GetSlots), m_Duplicate(Undo, Doc, GetSlots) {}
+            : m_Doc(Doc), m_Undo(Undo), m_GetSlots(GetSlots), m_SetImport(Undo, Doc, GetSlots), m_Duplicate(Undo, Doc, GetSlots), m_RemoveUnused(Undo, Doc) {}
+
+        // Above the Description inspector: the button that removes what the import made and the model no longer needs
+        void DrawUnusedButton() noexcept { if (m_Doc.isLoaded()) m_UnusedButton.Draw(m_Undo, m_Doc); }
 
         // The checkbox is one command, not a property edit: the slots follow it
         bool OnCustomChange(const xproperty::ui::undo::cmd& Cmd) noexcept

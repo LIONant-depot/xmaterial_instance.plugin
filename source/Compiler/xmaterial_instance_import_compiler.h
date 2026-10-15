@@ -9,8 +9,11 @@
 //      SamplerNormal   the normal map (an OBJ "bump" map named like a normal map counts), or a flat normal
 //      SamplerORME     occlusion, roughness, metalness and emission packed from the PBR maps of the model, or constants: roughness from the
 //                      shininess, emission from the emissive color
-// Every resource is written in Cache/Descriptors only when its text changed, so recompiling the geometry does not recompile its textures.
+// Every resource is written in Descriptors only when its text changed, so recompiling the geometry does not recompile its textures. What exists already
+// is loaded and given only what the generator owns (xresource_pipeline_virtual.h): of a Material Instance the base material and the slots that still point
+// at a texture the geometry made (a slot the user pointed at another texture is theirs), of a Texture its input (the file or the mix); the rest is the user's.
 // The includer defines STB_IMAGE_IMPLEMENTATION once (the alpha and size checks read the images).
+#include "dependencies/xresource_pipeline_v2/source/xresource_pipeline_virtual.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_import.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_intance_descriptor.h"
 #include "plugins/xtexture.plugin/source/xtexture_rsc_descriptor.h"
@@ -28,7 +31,8 @@ namespace xmaterial_instance::import
     struct emitter
     {
         std::wstring                        m_ProjectPath;          // the project's root
-        std::wstring                        m_CachedDescriptors;    // where virtual resources live (xresource_pipeline project_paths::m_CachedDescriptors)
+        std::wstring                        m_Descriptors;          // where the descriptors of virtual resources live: the project's Descriptors (xresource_pipeline project_paths::m_Descriptors)
+        std::wstring                        m_OwnerFolder;          // the descriptor folder of the geometry: where the list of what it made is kept (Virtual.txt)
         xresource::full_guid                m_Owner;                // the geometry
         std::wstring                        m_ModelPath;            // the model, relative to the project (its textures are relative to it)
         const settings&                     m_Settings;
@@ -38,7 +42,13 @@ namespace xmaterial_instance::import
         // One instance per material, in the order of the list
         void Emit(const std::vector<xraw3d::geom::material_instance>& Materials) noexcept
         {
+            m_bHadList = m_Previous.Load(m_OwnerFolder);
             for (auto& M : Materials) EmitMaterial(M);
+
+            // What this compile made. What an earlier compile made and this one does not stays on disk, unused (the editor does not compile it)
+            xresource_pipeline::virtual_rsc::owned_list Made;
+            Made.m_Resources = m_Dependencies.m_VirtualResources;
+            Made.Save(m_OwnerFolder);
         }
 
         //------------------------------------------------------------------------------------
@@ -47,6 +57,9 @@ namespace xmaterial_instance::import
         struct image_info { int m_Width = 0, m_Height = 0, m_Channels = 0; };
 
         std::map<std::string, xrsc::texture_ref>    m_Textures;     // by what they are made of: a texture several materials share is made once
+
+        xresource_pipeline::virtual_rsc::owned_list m_Previous;     // what the earlier compile of the geometry made (Virtual.txt)
+        bool                                        m_bHadList = false;
 
         static std::string Param(const xraw3d::geom::material_instance& M, std::string_view Name) noexcept
         {
@@ -120,30 +133,31 @@ namespace xmaterial_instance::import
         // Named like every resource folder: the guid without leading zeros (xresource_mgr loads by {:X})
         std::wstring DescriptorFolder(std::string_view Type, std::uint64_t Value) const noexcept
         {
-            return std::format(L"{}\\{}\\{:02X}\\{:02X}\\{:X}.desc", m_CachedDescriptors, xstrtool::To(Type), Value & 0xFF, (Value >> 8) & 0xFF, Value);
+            return std::format(L"{}\\{}\\{:02X}\\{:02X}\\{:X}.desc", m_Descriptors, xstrtool::To(Type), Value & 0xFF, (Value >> 8) & 0xFF, Value);
         }
 
-        // Writes a file through a temporary one (outside the project: its watcher sees every file) and keeps the old one when nothing changed:
-        // its time is what decides a recompile
         template<typename T_WRITE>
-        static void WriteIfChanged(const std::wstring& Path, T_WRITE&& Write) noexcept
-        {
-            namespace fs = std::filesystem;
-            std::error_code Ec;
-            const auto Temp = (fs::temp_directory_path(Ec) / std::format(L"xmaterial_import_{:016X}.txt", std::hash<std::wstring>{}(Path))).wstring();
-            Write(Temp);
+        static void WriteIfChanged(const std::wstring& Path, T_WRITE&& Write) noexcept { xresource_pipeline::virtual_rsc::WriteIfChanged(Path, std::forward<T_WRITE>(Write)); }
 
-            auto Read = [](const std::wstring& P) { std::ifstream F(fs::path(P), std::ios::binary); return std::string(std::istreambuf_iterator<char>(F), {}); };
-            if (!fs::exists(Path, Ec) || Read(Path) != Read(Temp)) fs::copy_file(Temp, Path, fs::copy_options::overwrite_existing, Ec);
-            fs::remove(Temp, Ec);
-        }
-
-        void WriteInfo(const std::wstring& Folder, xresource::full_guid Guid, const std::string& Name, xresource::full_guid Parent) noexcept
+        // Whether the generator made this texture: it is on the list of the earlier compile; with no list yet (a project from before the lists) a texture
+        // whose Info links a Material Instance that links the geometry
+        bool IsGenerated(const xrsc::texture_ref Texture) noexcept
         {
-            xresource_pipeline::info Info{ Guid };
-            Info.m_Name = Name;
-            Info.m_RscLinks.push_back(Parent);          // shows as the parent's child in the asset browser
-            WriteIfChanged(Folder + L"\\Info.txt", [&](const std::wstring& P) { xproperty::settings::context C; Info.Serialize(false, P, C); });
+            const xresource::full_guid Guid{ Texture.m_Instance, xtexture_rsc::resource_type_guid_v };
+            if (m_Previous.Contains(Guid)) return true;
+            if (m_bHadList) return false;
+
+            auto Parents = [&](std::string_view Type, xresource::full_guid G)
+            {
+                xresource_pipeline::info Info;
+                xproperty::settings::context C;
+                if (Info.Serialize(true, DescriptorFolder(Type, G.m_Instance.m_Value) + L"\\Info.txt", C)) return std::vector<xresource::full_guid>{};
+                return Info.m_RscLinks;
+            };
+            for (auto& Instance : Parents("Texture", Guid))
+                for (auto& Owner : Parents("MaterialInstance", Instance))
+                    if (Owner == m_Owner) return true;
+            return false;
         }
 
         // A virtual texture, made once per key
@@ -159,8 +173,8 @@ namespace xmaterial_instance::import
             xtexture_rsc::descriptor Desc;
             Desc.m_UWrap = Desc.m_VWrap = xtexture_rsc::wrap_type::WRAP;
             Setup(Desc);
-            WriteIfChanged(Folder + L"\\Descriptor.txt", [&](const std::wstring& P) { xproperty::settings::context C; Desc.Serialize(false, P, C); });
-            WriteInfo(Folder, Ref, Name, Parent);
+            xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Desc, [](xtexture_rsc::descriptor& Existing, const xtexture_rsc::descriptor& Fresh) { Existing.m_InputVariant = Fresh.m_InputVariant; });
+            xresource_pipeline::virtual_rsc::EmitInfo(Folder, Ref, Name, Parent);
 
             m_Dependencies.m_VirtualResources.push_back(Ref);
             return m_Textures[Key] = Ref;
@@ -387,8 +401,25 @@ namespace xmaterial_instance::import
             const auto Folder = DescriptorFolder("MaterialInstance", InstanceGuid.m_Instance.m_Value);
             std::error_code Ec;
             std::filesystem::create_directories(Folder, Ec);
-            WriteIfChanged(Folder + L"\\Descriptor.txt", [&](const std::wstring& P) { xproperty::settings::context C; Instance.Serialize(false, P, C); });
-            WriteInfo(Folder, InstanceGuid, M.m_Name, m_Owner);
+            xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Instance, [&](xmaterial_instance::descriptor& Existing, const xmaterial_instance::descriptor& Fresh)
+            {
+                // The generator's: the base material and the slots that still point at what the geometry made. A slot the user pointed at another texture stays.
+                std::vector<xrsc::texture_ref> Slots = Fresh.m_lTextures;
+                for (std::size_t i = 0; i < Fresh.m_lTextureDefaults.size(); ++i)
+                    for (std::size_t j = 0; j < Existing.m_lTextureDefaults.size() && j < Existing.m_lTextures.size(); ++j)
+                    {
+                        if (Existing.m_lTextureDefaults[j].m_Name != Fresh.m_lTextureDefaults[i].m_Name) continue;
+                        const auto  Kept    = Existing.m_lTextures[j];
+                        const auto  Default = Existing.m_lFinalTextures.size() > static_cast<std::size_t>(Existing.m_lTextureDefaults[j].m_Index) ? Existing.m_lFinalTextures[Existing.m_lTextureDefaults[j].m_Index].m_TextureRef : xrsc::texture_ref{};
+                        if (!Kept.empty() && Kept != Default && !IsGenerated(Kept)) Slots[i] = Kept;
+                        break;
+                    }
+                Existing.m_MaterialRef      = Fresh.m_MaterialRef;
+                Existing.m_lTextureDefaults = Fresh.m_lTextureDefaults;
+                Existing.m_lFinalTextures   = Fresh.m_lFinalTextures;
+                Existing.m_lTextures        = std::move(Slots);
+            });
+            xresource_pipeline::virtual_rsc::EmitInfo(Folder, InstanceGuid, M.m_Name, m_Owner);
             m_Dependencies.m_VirtualResources.push_back(InstanceGuid);
         }
     };
