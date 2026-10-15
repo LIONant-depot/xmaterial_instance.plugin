@@ -210,6 +210,9 @@ namespace xmaterial_instance::import::editor
                 if (bSlot) { NewName = std::format("{} {}", pName, S.m_Names[Index]); pName = NewName.c_str(); }
 
                 if (bDisable) ImGui::BeginDisabled(true);
+                // As tall as the reference widget beside the label (whoever draws the label, a reference row has one height): the label and the
+                // override arrow both, from the top of the row to its bottom
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, xproperty::inspector::ResourceRowFramePadding(Inspector.m_CurrentProperty.m_Flags.m_bSmallResource));
                 if (bOverride)
                 {
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(170, 170, 255, 255));
@@ -225,8 +228,6 @@ namespace xmaterial_instance::import::editor
                     ImGui::SameLine();
                 }
 
-                // As tall as the reference widget beside the label (whoever draws the label, a reference row has one height).
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, xproperty::inspector::ResourceRowFramePadding(Inspector.m_CurrentProperty.m_Flags.m_bSmallResource));
                 // The "  " (two leading spaces) gives an ordinary resource-ref row a little breathing room against the Framed box's own left edge.
                 // A slot row sits in the array-controls cluster (drag/insert/delete icons right to its left): no padding there.
                 if (!Path.empty()) Open = ImGui::TreeNodeEx(reinterpret_cast<const void*>(std::hash<std::string_view>{}(Path)), ImGuiTreeNodeFlags_Framed | Flags, bSlot ? "%s" : "  %s", pName);
