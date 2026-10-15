@@ -14,6 +14,7 @@
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_runtime.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_runtime.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.cpp"      // the resource loader: compiled once, in the host's translation unit
+#include "plugins/xmaterial_instance.plugin/source/Editor/xmaterial_instance_thumbnail.h"
 
 #include <charconv>
 
@@ -205,6 +206,8 @@ namespace xmaterial_instance_editor
     , [](xresource::full_guid Guid, xresource_editor::library::guid LibraryGuid, xgpu::device* pDevice) -> std::unique_ptr<xeditor::resource_editor>
       { return std::make_unique<session>(Guid, LibraryGuid, pDevice); }
     };
+
+    inline const xeditor::auto_register_thumbnail_renderer g_ThumbReg{ xrsc::material_instance_type_guid_v, []{ return std::make_unique<thumbnail_renderer>(); } };
 }
 
 #endif // XMATERIAL_INSTANCE_EDITOR_H
