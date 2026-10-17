@@ -20,11 +20,15 @@
 #include "dependencies/xraw3d/source/xraw3d.h"
 #include "dependencies/stb/stb_image.h"
 
+#include <algorithm>
+#include <cstdio>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
 #include <sstream>
+#include <vector>
 
 namespace xmaterial_instance::import
 {
@@ -38,6 +42,7 @@ namespace xmaterial_instance::import
         const settings&                     m_Settings;
         xresource_pipeline::dependencies&   m_Dependencies;
         std::function<void(std::string)>    m_Warning;
+        std::function<void(std::string)>    m_Info;                 // optional: where a texture the model names was found, when it was looked for
 
         // One instance per material, in the order of the list
         void Emit(const std::vector<xraw3d::geom::material_instance>& Materials) noexcept
@@ -78,8 +83,31 @@ namespace xmaterial_instance::import
 
         std::wstring Full(const std::wstring& ProjectRelative) const noexcept { return m_ProjectPath + L"\\" + ProjectRelative; }
 
-        // A texture path of the model, as the project sees it ("Assets\...", empty when it is not there). Exporters write paths of the artist's
-        // machine: when the path does not exist the file is looked for by name under the model's folder.
+        // A file name in lower case (what towlower knows), with .jpeg read as .jpg and .tiff as .tif: two names with the same key are the same texture
+        static std::wstring Fold(std::wstring Text) noexcept
+        {
+            for (auto& c : Text) c = static_cast<wchar_t>(std::towlower(c));
+            return Text;
+        }
+        static std::wstring NameKey(const std::filesystem::path& Name) noexcept
+        {
+            auto Ext = Fold(Name.extension().wstring());
+            if      (Ext == L".jpeg") Ext = L".jpg";
+            else if (Ext == L".tiff") Ext = L".tif";
+            return Fold(Name.stem().wstring()) + Ext;
+        }
+        static std::string UTF8(const std::filesystem::path& Path) noexcept { return xstrtool::UTF16ToUTF8(Path.wstring()); }
+
+        // A texture path of the model, as the project sees it ("Assets\...", empty when it is not found or not in the project). The model's paths are
+        // UTF-8, with \ or /, and exporters write paths of the artist's machine: absolute, or relative to a folder that is not there ("Model.fbm\x.png"
+        // with the textures copied to a "textures" folder next to the model's). The first that exists is taken:
+        //  1. the path as given: absolute, or relative to the model's folder
+        //  2. its file name in the model's folder
+        //  3. its file name in the usual texture folders of the model's folder and of its parent: textures, texture, tex, images, image, maps (any case),
+        //     <model>.fbm and the folder the path names (an FBX exporter's .fbm)
+        //  4. its file name anywhere under the asset's folder (the parent of the model's folder when that is "source", "sources" or "src", else the
+        //     model's folder; never above the project), the one closest to the model's folder first
+        // A file name matches whatever its case, and .jpg/.jpeg (.tif/.tiff) match each other (NameKey). What a search found is logged (m_Info).
         std::wstring Resolve(const std::string& Raw) noexcept
         {
             if (Raw.empty()) return {};
@@ -87,31 +115,109 @@ namespace xmaterial_instance::import
 
             namespace fs = std::filesystem;
             std::error_code Ec;
-            const fs::path  Project  = fs::path(m_ProjectPath);
-            const fs::path  ModelDir = (Project / m_ModelPath).parent_path();
-            fs::path        Path     = fs::path(xstrtool::To(Raw)).make_preferred();
+            const fs::path  Project  = fs::path(m_ProjectPath).lexically_normal();
+            const fs::path  ModelDir = (Project / m_ModelPath).lexically_normal().parent_path();
+
+            // UTF-8 to wide: a narrow std::filesystem::path would read the bytes as the code page (on Windows), and lose any name that is not ASCII
+            std::wstring Wide = xstrtool::UTF8ToUTF16(Raw);
+            for (auto& c : Wide) if (c == L'\\' || c == L'/') c = static_cast<wchar_t>(fs::path::preferred_separator);
+            const fs::path Path = fs::path(Wide).lexically_normal();
+            const auto     Key  = NameKey(Path.filename());
+
+            const auto IsFile = [](const fs::path& P) { std::error_code E; return fs::is_regular_file(P, E); };
+
+            // The file of that name in Dir (any case), each folder looked in once
+            std::vector<fs::path> Searched;
+            const auto InFolder = [&](const fs::path& Dir) -> fs::path
+            {
+                std::error_code E;
+                if (Dir.empty() || std::ranges::find(Searched, Dir) != Searched.end() || !fs::is_directory(Dir, E)) return {};
+                Searched.push_back(Dir);
+                for (auto It = fs::directory_iterator(Dir, E); !E && It != fs::directory_iterator(); It.increment(E))
+                {
+                    std::error_code F;
+                    if (It->is_regular_file(F) && NameKey(It->path().filename()) == Key) return It->path();
+                }
+                return {};
+            };
 
             fs::path Found;
-            if      (Path.is_absolute() && fs::exists(Path, Ec)) Found = Path;
-            else if (fs::exists(ModelDir / Path, Ec))           Found = ModelDir / Path;
-            else
+            if      (Path.is_absolute()) { if (IsFile(Path)) Found = Path; }
+            else if (IsFile(ModelDir / Path)) Found = ModelDir / Path;
+            const bool bAsGiven = !Found.empty();
+
+            // 2.
+            if (Found.empty()) Found = InFolder(ModelDir);
+
+            // 3.
+            if (Found.empty())
             {
-                const auto Name = xstrtool::ToLowerCopy(Path.filename().wstring());
-                for (auto It = fs::recursive_directory_iterator(ModelDir, Ec); !Ec && It != fs::recursive_directory_iterator(); It.increment(Ec))
-                    if (It->is_regular_file(Ec) && xstrtool::ToLowerCopy(It->path().filename().wstring()) == Name) { Found = It->path(); break; }
+                const std::wstring Names[] = { L"textures", L"texture", L"tex", L"images", L"image", L"maps"
+                                             , Fold(fs::path(m_ModelPath).stem().wstring() + L".fbm"), Fold(Path.parent_path().filename().wstring()) };
+                for (const fs::path& Base : { ModelDir, ModelDir.parent_path() })
+                {
+                    std::error_code E;
+                    for (auto It = fs::directory_iterator(Base, E); Found.empty() && !E && It != fs::directory_iterator(); It.increment(E))
+                    {
+                        std::error_code F;
+                        if (!It->is_directory(F)) continue;
+                        const auto Name = Fold(It->path().filename().wstring());
+                        if (!Name.empty() && std::ranges::find(Names, Name) != std::end(Names)) Found = InFolder(It->path());
+                    }
+                    if (!Found.empty()) break;
+                }
             }
 
-            if (Found.empty()) { m_Warning(std::format("Import Materials: texture {} not found (looked under {})", Raw, xstrtool::To(ModelDir.wstring()))); return {}; }
+            // 4.
+            fs::path Root = ModelDir;
+            if (const auto Name = Fold(ModelDir.filename().wstring()); Name == L"source" || Name == L"sources" || Name == L"src")
+                if (const auto Up = ModelDir.parent_path(); !Up.lexically_relative(Project).empty() && !Up.lexically_relative(Project).wstring().starts_with(L".."))
+                    Root = Up;
+            if (Found.empty())
+            {
+                std::size_t BestDistance = SIZE_MAX;
+                for (auto It = fs::recursive_directory_iterator(Root, fs::directory_options::skip_permission_denied, Ec); !Ec && It != fs::recursive_directory_iterator(); It.increment(Ec))
+                {
+                    std::error_code F;
+                    if (!It->is_regular_file(F) || NameKey(It->path().filename()) != Key) continue;
+                    std::size_t Distance = 0;
+                    for (const auto& Part : It->path().parent_path().lexically_relative(ModelDir)) { (void)Part; ++Distance; }
+                    if (Distance < BestDistance || (Distance == BestDistance && It->path() < Found)) { BestDistance = Distance; Found = It->path(); }
+                }
+            }
+
+            if (Found.empty())
+            {
+                std::string Where;
+                for (const auto& Dir : Searched) Where += (Where.empty() ? "" : ", ") + UTF8(Dir);
+                m_Warning(std::format("Import Materials: texture {} not found (looked in {}{}and in every folder under {})", Raw, Where, Where.empty() ? "" : ", ", UTF8(Root)));
+                return {};
+            }
+            if (!bAsGiven && m_Info) m_Info(std::format("Import Materials: texture {} found as {}", Raw, UTF8(Found)));
 
             const auto Relative = fs::relative(Found, Project, Ec).lexically_normal().make_preferred().wstring();
-            if (Ec || Relative.starts_with(L"..")) { m_Warning(std::format("Import Materials: texture {} is outside the project", xstrtool::To(Found.wstring()))); return {}; }
+            if (Ec || Relative.starts_with(L"..")) { m_Warning(std::format("Import Materials: texture {} is outside the project", UTF8(Found))); return {}; }
             return Relative;
+        }
+
+        // stb opens a file by a narrow name, which on Windows is the code page (not UTF-8): the file is opened here by its wide name
+        static FILE* OpenImage(const std::wstring& Path) noexcept
+        {
+        #if defined(_WIN32)
+            FILE* pFile = nullptr;
+            return _wfopen_s(&pFile, Path.c_str(), L"rb") == 0 ? pFile : nullptr;
+        #else
+            return std::fopen(xstrtool::UTF16ToUTF8(Path).c_str(), "rb");
+        #endif
         }
 
         image_info Info(const std::wstring& Path) const noexcept
         {
             image_info I;
-            if (!stbi_info(xstrtool::To(Full(Path)).c_str(), &I.m_Width, &I.m_Height, &I.m_Channels)) I = {};
+            FILE* pFile = OpenImage(Full(Path));
+            if (!pFile) return I;
+            if (!stbi_info_from_file(pFile, &I.m_Width, &I.m_Height, &I.m_Channels)) I = {};
+            std::fclose(pFile);
             return I;
         }
 
@@ -119,8 +225,11 @@ namespace xmaterial_instance::import
         bool HasCutOut(const std::wstring& Path) const noexcept
         {
             if (Info(Path).m_Channels != 4) return false;
+            FILE* pFile = OpenImage(Full(Path));
+            if (!pFile) return false;
             int W, H, C;
-            auto* pData = stbi_load(xstrtool::To(Full(Path)).c_str(), &W, &H, &C, 4);
+            auto* pData = stbi_load_from_file(pFile, &W, &H, &C, 4);
+            std::fclose(pFile);
             if (!pData) return false;
             bool bCut = false;
             for (int i = 0, n = W * H; i < n && !bCut; ++i) bCut = pData[i * 4 + 3] < 128;
@@ -213,7 +322,7 @@ namespace xmaterial_instance::import
             return Input;
         }
 
-        static std::string Stem(const std::wstring& Path) { return xstrtool::To(std::filesystem::path(Path).stem().wstring()); }
+        static std::string Stem(const std::wstring& Path) { return xstrtool::UTF16ToUTF8(std::filesystem::path(Path).stem().wstring()); }
 
         static bool LooksLikeNormalMap(const std::string& Path) noexcept
         {
@@ -272,12 +381,12 @@ namespace xmaterial_instance::import
                 const auto OI = Opacity.empty() ? image_info{} : Info(Opacity);
                 if (!Opacity.empty() && (OI.m_Width != DI.m_Width || OI.m_Height != DI.m_Height))
                 {
-                    m_Warning(std::format("Import Materials: material {}: the opacity map {} is not the size of the color map, it is not used", M.m_Name, xstrtool::To(Opacity)));
+                    m_Warning(std::format("Import Materials: material {}: the opacity map {} is not the size of the color map, it is not used", M.m_Name, xstrtool::UTF16ToUTF8(Opacity)));
                 }
                 else if (!Opacity.empty())
                 {
                     bAlphaTest = true;
-                    Albedo = Texture(xstrtool::To(Diffuse + L"|" + Opacity), Stem(Diffuse) + " (color, cut out)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
+                    Albedo = Texture(xstrtool::UTF16ToUTF8(Diffuse + L"|" + Opacity), Stem(Diffuse) + " (color, cut out)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                     {
                         D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
                         D.m_Compression          = m_Settings.AlbedoAlpha();
@@ -289,7 +398,7 @@ namespace xmaterial_instance::import
                 if (!bAlphaTest && HasCutOut(Diffuse))
                 {
                     bAlphaTest = true;
-                    Albedo = Texture(xstrtool::To(Diffuse + L"|alpha"), Stem(Diffuse) + " (color and alpha)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
+                    Albedo = Texture(xstrtool::UTF16ToUTF8(Diffuse + L"|alpha"), Stem(Diffuse) + " (color and alpha)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                     {
                         D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
                         D.m_Compression          = m_Settings.AlbedoAlpha();
@@ -299,7 +408,7 @@ namespace xmaterial_instance::import
                 }
                 else if (!bAlphaTest)
                 {
-                    Albedo = Texture(xstrtool::To(Diffuse), Stem(Diffuse) + " (color)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
+                    Albedo = Texture(xstrtool::UTF16ToUTF8(Diffuse), Stem(Diffuse) + " (color)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                     {
                         D.m_UsageType    = xtexture_rsc::usage_type::COLOR;
                         D.m_Compression  = m_Settings.Albedo();
@@ -324,7 +433,7 @@ namespace xmaterial_instance::import
             // Normal
             //
             const auto NormalRef = !Normal.empty()
-                ? Texture(xstrtool::To(Normal), Stem(Normal) + " (normal)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
+                ? Texture(xstrtool::UTF16ToUTF8(Normal), Stem(Normal) + " (normal)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                 {
                     D.m_UsageType    = xtexture_rsc::usage_type::TANGENT_NORMAL;
                     D.m_Compression  = m_Settings.Normal();
@@ -354,18 +463,18 @@ namespace xmaterial_instance::import
                 const auto I = Info(Path);
                 if (Size.empty()) { Size = Path; SizeInfo = I; return true; }
                 if (I.m_Width == SizeInfo.m_Width && I.m_Height == SizeInfo.m_Height) return true;
-                m_Warning(std::format("Import Materials: material {}: the {} map {} is not the size of {}, it is not used", M.m_Name, pWhat, xstrtool::To(Path), xstrtool::To(Size)));
+                m_Warning(std::format("Import Materials: material {}: the {} map {} is not the size of {}, it is not used", M.m_Name, pWhat, xstrtool::UTF16ToUTF8(Path), xstrtool::UTF16ToUTF8(Size)));
                 return false;
             };
 
             std::vector<xtexture_rsc::mix> Mixes;
             std::string Key = "orme";
             const bool bSharedRM = !Rough.empty() && Rough == Metal;       // glTF metallic-roughness: G and B
-            if (Usable(AO, "occlusion"))    { Mixes.push_back(Channel(AO,    from::R, to::R)); Key += "|ao:" + xstrtool::To(AO); }
+            if (Usable(AO, "occlusion"))    { Mixes.push_back(Channel(AO,    from::R, to::R)); Key += "|ao:" + xstrtool::UTF16ToUTF8(AO); }
             else                              Mixes.push_back(Constant(1, to::R));
-            if (Usable(Rough, "roughness")) { Mixes.push_back(Channel(Rough, bSharedRM ? from::G : from::R, to::G)); Key += "|r:" + xstrtool::To(Rough); }
+            if (Usable(Rough, "roughness")) { Mixes.push_back(Channel(Rough, bSharedRM ? from::G : from::R, to::G)); Key += "|r:" + xstrtool::UTF16ToUTF8(Rough); }
             else                            { Mixes.push_back(Constant(Roughness, to::G)); Key += std::format("|r{:.3f}", Roughness); }
-            if (Usable(Metal, "metalness")) { Mixes.push_back(Channel(Metal, bSharedRM ? from::B : from::R, to::B)); Key += "|m:" + xstrtool::To(Metal); }
+            if (Usable(Metal, "metalness")) { Mixes.push_back(Channel(Metal, bSharedRM ? from::B : from::R, to::B)); Key += "|m:" + xstrtool::UTF16ToUTF8(Metal); }
             else                              Mixes.push_back(Constant(0, to::B));
             Mixes.push_back(Constant(Emission, to::A));
             Key += std::format("|e{:.0f}", Emission);
