@@ -106,7 +106,8 @@ namespace xmaterial_instance::import
         //  3. its file name in the usual texture folders of the model's folder and of its parent: textures, texture, tex, images, image, maps (any case),
         //     <model>.fbm and the folder the path names (an FBX exporter's .fbm)
         //  4. its file name anywhere under the asset's folder (the parent of the model's folder when that is "source", "sources" or "src", else the
-        //     model's folder; never above the project), the one closest to the model's folder first
+        //     model's folder; and when the path climbs out of it, "..\BuildingTextures\x.png", the folder it climbs to: an OBJ's .mtl names its
+        //     textures relative to itself; never above the project), the one closest to the model's folder first
         // A file name matches whatever its case, and .jpg/.jpeg (.tif/.tiff) match each other (NameKey). What a search found is logged (m_Info).
         std::wstring Resolve(const std::string& Raw) noexcept
         {
@@ -173,6 +174,16 @@ namespace xmaterial_instance::import
             if (const auto Name = Fold(ModelDir.filename().wstring()); Name == L"source" || Name == L"sources" || Name == L"src")
                 if (const auto Up = ModelDir.parent_path(); !Up.lexically_relative(Project).empty() && !Up.lexically_relative(Project).wstring().starts_with(L".."))
                     Root = Up;
+            // A relative path that climbs out of Root (its folder may not be there: the textures were moved to a sibling folder) widens the search to
+            // where it climbs: the folder both Root and the path's folder are under
+            if (!Path.is_absolute())
+            {
+                const fs::path Named = (ModelDir / Path).lexically_normal().parent_path();
+                fs::path       Common;
+                for (auto A = Root.begin(), B = Named.begin(); A != Root.end() && B != Named.end() && Fold(A->wstring()) == Fold(B->wstring()); ++A, ++B) Common /= *A;
+                if (const auto Rel = Common.lexically_relative(Project); !Common.empty() && !Rel.empty() && !Rel.wstring().starts_with(L".."))
+                    Root = Common;
+            }
             if (Found.empty())
             {
                 std::size_t BestDistance = SIZE_MAX;
