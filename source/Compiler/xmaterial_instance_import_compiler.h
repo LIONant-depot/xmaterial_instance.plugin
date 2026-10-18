@@ -5,13 +5,14 @@
 // The compiler half of xmaterial_instance_import.h: a geometry compiler hands the materials of its model to emit() and gets one virtual
 // Material Instance per material (made from the PBR material of the settings) with virtual Textures in its slots:
 //      SamplerAlbedo   the color map (its alpha, or the opacity map, cuts the surface out: then the instance uses the alpha test material),
-//                      or the diffuse color
+//                      or the diffuse color when the model has none, or magenta when the one it names is not found (each a warning, and their sum)
 //      SamplerNormal   the normal map (an OBJ "bump" map named like a normal map counts), or a flat normal
 //      SamplerORME     occlusion, roughness, metalness and emission packed from the PBR maps of the model, or constants: roughness from the
 //                      shininess, emission from the emissive color
 // Every resource is written in Descriptors only when its text changed, so recompiling the geometry does not recompile its textures. What exists already
-// is loaded and given only what the generator owns (xresource_pipeline_virtual.h): of a Material Instance the base material and the slots that still point
-// at a texture the geometry made (a slot the user pointed at another texture is theirs), of a Texture nothing (its guid is made from its input: the same texture has the same input, so what it holds is the user's); the rest is the user's.
+// is the user's (xresource_pipeline_virtual.h): the import makes what is missing and never updates what exists, a Material Instance (its base material, slots
+// and params) or a Texture (its guid is made from its input: the same texture has the same input, so what it holds is the user's). The one exception: a slot
+// that still holds the magenta placeholder of a missing texture takes the texture once it is found. Reapplying the import is explicit (the editor's buttons).
 // The includer defines STB_IMAGE_IMPLEMENTATION once (the alpha and size checks read the images).
 #include "dependencies/xresource_pipeline_v2/source/xresource_pipeline_virtual.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_import.h"
@@ -50,6 +51,14 @@ namespace xmaterial_instance::import
             m_bHadList = m_Previous.Load(m_OwnerFolder);
             for (auto& M : Materials) EmitMaterial(M);
 
+            // The textures the model names that are not there: each was warned of where it was looked for, and the sum of them (a problem of the compile)
+            if (!m_Missing.empty())
+            {
+                std::string First;
+                for (std::size_t i = 0; i < m_Missing.size() && i < 5; ++i) First += (i ? ", " : "") + m_Missing[i];
+                m_Warning(std::format("Import Materials: {} textures missing (their materials show magenta); first few: {}{}", m_Missing.size(), First, m_Missing.size() > 5 ? ", ..." : ""));
+            }
+
             // What this compile made. What an earlier compile made and this one does not stays on disk, unused (the editor does not compile it)
             xresource_pipeline::virtual_rsc::owned_list Made;
             Made.m_Resources = m_Dependencies.m_VirtualResources;
@@ -62,6 +71,7 @@ namespace xmaterial_instance::import
         struct image_info { int m_Width = 0, m_Height = 0, m_Channels = 0; };
 
         std::map<std::string, xrsc::texture_ref>    m_Textures;     // by what they are made of: a texture several materials share is made once
+        std::vector<std::string>                    m_Missing;      // the textures the model names that Resolve did not find (once each)
 
         xresource_pipeline::virtual_rsc::owned_list m_Previous;     // what the earlier compile of the geometry made (Virtual.txt)
         bool                                        m_bHadList = false;
@@ -112,7 +122,8 @@ namespace xmaterial_instance::import
         std::wstring Resolve(const std::string& Raw) noexcept
         {
             if (Raw.empty()) return {};
-            if (Raw[0] == '*') { m_Warning(std::format("Import Materials: the texture {} is embedded in the model, it is not imported", Raw)); return {}; }
+            const auto Missing = [&] { if (std::ranges::find(m_Missing, Raw) == m_Missing.end()) m_Missing.push_back(Raw); return std::wstring{}; };
+            if (Raw[0] == '*') { m_Warning(std::format("Import Materials: the texture {} is embedded in the model, it is not imported", Raw)); return Missing(); }
 
             namespace fs = std::filesystem;
             std::error_code Ec;
@@ -202,12 +213,12 @@ namespace xmaterial_instance::import
                 std::string Where;
                 for (const auto& Dir : Searched) Where += (Where.empty() ? "" : ", ") + UTF8(Dir);
                 m_Warning(std::format("Import Materials: texture {} not found (looked in {}{}and in every folder under {})", Raw, Where, Where.empty() ? "" : ", ", UTF8(Root)));
-                return {};
+                return Missing();
             }
             if (!bAsGiven && m_Info) m_Info(std::format("Import Materials: texture {} found as {}", Raw, UTF8(Found)));
 
             const auto Relative = fs::relative(Found, Project, Ec).lexically_normal().make_preferred().wstring();
-            if (Ec || Relative.starts_with(L"..")) { m_Warning(std::format("Import Materials: texture {} is outside the project", UTF8(Found))); return {}; }
+            if (Ec || Relative.starts_with(L"..")) { m_Warning(std::format("Import Materials: texture {} is outside the project", UTF8(Found))); return Missing(); }
             return Relative;
         }
 
@@ -366,7 +377,8 @@ namespace xmaterial_instance::import
             //
             // What the model gives
             //
-            const auto Diffuse   = Resolve(Param(M, "DiffuseMap"));
+            const auto RawDiffuse = Param(M, "DiffuseMap");
+            const auto Diffuse   = Resolve(RawDiffuse);
             const auto RawOpacity = Param(M, "OpacityMap");
             const auto Opacity   = RawOpacity.empty() || RawOpacity == Param(M, "DiffuseMap") ? std::wstring{} : Resolve(RawOpacity);
             const auto RawHeight = Param(M, "HeightMap");
@@ -426,6 +438,18 @@ namespace xmaterial_instance::import
                         D.m_InputVariant = Single(Diffuse);
                     });
                 }
+            }
+            else if (!RawDiffuse.empty())
+            {
+                // The model names a color map that is not there: magenta, so it shows (the summary of the compile lists it)
+                Albedo = Texture("missing_texture", "Missing texture", InstanceGuid, [&](xtexture_rsc::descriptor& D)
+                {
+                    D.m_UsageType     = xtexture_rsc::usage_type::COLOR;
+                    D.m_Compression   = xtexture_rsc::compression_format::RGBA_UNCOMPRESSED;
+                    D.m_bSRGB         = false;
+                    D.m_bGenerateMips = false;
+                    D.m_InputVariant  = Mixed({ Constant(1, to::R), Constant(0, to::G), Constant(1, to::B), Constant(1, to::A) });
+                });
             }
             else
             {
@@ -524,21 +548,19 @@ namespace xmaterial_instance::import
             std::filesystem::create_directories(Folder, Ec);
             if (!xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Instance, [&](xmaterial_instance::descriptor& Existing, const xmaterial_instance::descriptor& Fresh)
             {
-                // The generator's: the base material and the slots that still point at what the geometry made. A slot the user pointed at another texture stays.
-                std::vector<xrsc::texture_ref> Slots = Fresh.m_lTextures;
-                for (std::size_t i = 0; i < Fresh.m_lTextureDefaults.size(); ++i)
-                    for (std::size_t j = 0; j < Existing.m_lTextureDefaults.size() && j < Existing.m_lTextures.size(); ++j)
-                    {
-                        if (Existing.m_lTextureDefaults[j].m_Name != Fresh.m_lTextureDefaults[i].m_Name) continue;
-                        const auto  Kept    = Existing.m_lTextures[j];
-                        const auto  Default = Existing.m_lFinalTextures.size() > static_cast<std::size_t>(Existing.m_lTextureDefaults[j].m_Index) ? Existing.m_lFinalTextures[Existing.m_lTextureDefaults[j].m_Index].m_TextureRef : xrsc::texture_ref{};
-                        if (!Kept.empty() && Kept != Default && !IsGenerated(Kept)) Slots[i] = Kept;
-                        break;
-                    }
-                Existing.m_MaterialRef      = Fresh.m_MaterialRef;
-                Existing.m_lTextureDefaults = Fresh.m_lTextureDefaults;
-                Existing.m_lFinalTextures   = Fresh.m_lFinalTextures;
-                Existing.m_lTextures        = std::move(Slots);
+                // An instance that exists is the user's, as a texture is: its base material, slots and params stay as they are. The one thing given to
+                // it is a texture that was missing: a slot that still holds the magenta placeholder takes the texture the model names, now that it is found.
+                const xrsc::texture_ref Placeholder{ .m_Instance = xresource::instance_guid::GenerateGUIDCopy(std::format("{}_texture_missing_texture", GuidHex(m_Owner.m_Instance.m_Value)).c_str()) };
+                for (std::size_t j = 0; j < Existing.m_lTextureDefaults.size() && j < Existing.m_lTextures.size(); ++j)
+                {
+                    if (Existing.m_lTextures[j] != Placeholder) continue;
+                    for (std::size_t i = 0; i < Fresh.m_lTextureDefaults.size() && i < Fresh.m_lTextures.size(); ++i)
+                        if (Fresh.m_lTextureDefaults[i].m_Name == Existing.m_lTextureDefaults[j].m_Name && Fresh.m_lTextures[i] != Placeholder)
+                        {
+                            Existing.m_lTextures[j] = Fresh.m_lTextures[i];
+                            if (m_Info) m_Info(std::format("Import Materials: material {}: its missing {} is found, the slot takes it", M.m_Name, Fresh.m_lTextureDefaults[i].m_Name));
+                        }
+                }
             }))
                 m_Warning(std::format("Import Materials: the descriptor of the instance {} could not be read: it is left as it is", M.m_Name));
             xresource_pipeline::virtual_rsc::EmitInfo(Folder, InstanceGuid, M.m_Name, m_Owner);
