@@ -11,8 +11,8 @@
 //                      shininess, emission from the emissive color
 // Every resource is written in Descriptors only when its text changed, so recompiling the geometry does not recompile its textures. What exists already
 // is the user's (xresource_pipeline_virtual.h): the import makes what is missing and never updates what exists, a Material Instance (its base material, slots
-// and params) or a Texture (its guid is made from its input: the same texture has the same input, so what it holds is the user's). The one exception: a slot
-// that still holds the magenta placeholder of a missing texture takes the texture once it is found. Reapplying the import is explicit (the editor's buttons).
+// and params) or a Texture (its guid is made from its input: the same texture has the same input, so what it holds is the user's). The exceptions: a slot
+// that still holds the magenta placeholder of a missing texture, or only constants (no map was there), takes the texture once it is found. Reapplying the import is explicit (the editor's buttons).
 // The includer defines STB_IMAGE_IMPLEMENTATION once (the alpha and size checks read the images).
 #include "dependencies/xresource_pipeline_v2/source/xresource_pipeline_virtual.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_import.h"
@@ -106,6 +106,59 @@ namespace xmaterial_instance::import
             else if (Ext == L".tiff") Ext = L".tif";
             return Fold(Name.stem().wstring()) + Ext;
         }
+        // NameKey without what a file manager or a download adds to a copy's name: "x - Copy", "x - Copy (2)", "x (1)", "x_copy", "x-copy". The last resort of Resolve:
+        // the texture the model names is next to it under such a name
+        static std::wstring CopyKey(const std::filesystem::path& Name) noexcept
+        {
+            std::wstring Stem = Fold(Name.stem().wstring());
+            const auto   Strip = [&]
+            {
+                if (Stem.ends_with(L")"))
+                    if (const auto Open = Stem.rfind(L" ("); Open != std::wstring::npos && Open + 3 < Stem.size()
+                        && std::all_of(Stem.begin() + Open + 2, Stem.end() - 1, [](wchar_t c) { return c >= L'0' && c <= L'9'; }))
+                    { Stem.erase(Open); return true; }
+                for (const wchar_t* pSuffix : { L" - copy", L" copy", L"_copy", L"-copy" })
+                    if (const std::wstring_view Suffix = pSuffix; Stem.ends_with(Suffix)) { Stem.erase(Stem.size() - Suffix.size()); return true; }
+                return false;
+            };
+            while (Strip()) {}
+            auto Ext = Fold(Name.extension().wstring());
+            if      (Ext == L".jpeg") Ext = L".jpg";
+            else if (Ext == L".tiff") Ext = L".tif";
+            return Stem + Ext;
+        }
+        // A map the model does not name, found by the way artists name them: next to the color map, "<base>_<role>.<ext>" for a color map "<base>_<Diffuse|Albedo|BaseColor...>.<ext>"
+        // ("Ch03_1001_Diffuse.png" and "Ch03_1001_Glossiness.png"; a copy's name counts, CopyKey). Tokens: the role's names, the first that has a file wins. Empty when there is none
+        std::wstring Sibling(const std::wstring& ColorMap, std::initializer_list<const wchar_t*> Tokens) const noexcept
+        {
+            namespace fs = std::filesystem;
+            if (ColorMap.empty()) return {};
+            const fs::path Color = fs::path(m_ProjectPath) / ColorMap;
+            std::wstring   Base  = fs::path(CopyKey(Color.filename())).stem().wstring();
+            for (const wchar_t* pRole : { L"basecolor", L"base_color", L"albedo", L"diffuse", L"colour", L"color", L"diff", L"col" })
+                if (const std::wstring_view Role = pRole; Base.ends_with(Role) && Base.size() > Role.size())
+                {
+                    Base.erase(Base.size() - Role.size());
+                    while (!Base.empty() && (Base.back() == L'_' || Base.back() == L'-' || Base.back() == L' ' || Base.back() == L'.')) Base.pop_back();
+                    break;
+                }
+            if (Base.empty()) return {};
+            std::error_code Ec;
+            for (const wchar_t* pToken : Tokens)
+                for (auto It = fs::directory_iterator(Color.parent_path(), Ec); !Ec && It != fs::directory_iterator(); It.increment(Ec))
+                {
+                    std::error_code F;
+                    if (!It->is_regular_file(F)) continue;
+                    const std::wstring Stem = fs::path(CopyKey(It->path().filename())).stem().wstring();
+                    for (const wchar_t* pSeparator : { L"_", L"-", L" ", L"" })
+                        if (Stem == Base + pSeparator + pToken)
+                        {
+                            const auto Relative = fs::relative(It->path(), fs::path(m_ProjectPath), F).lexically_normal().make_preferred().wstring();
+                            if (!F && !Relative.starts_with(L"..")) return Relative;
+                        }
+                }
+            return {};
+        }
         static std::string UTF8(const std::filesystem::path& Path) noexcept { return xstrtool::UTF16ToUTF8(Path.wstring()); }
 
         // A texture path of the model, as the project sees it ("Assets\...", empty when it is not found or not in the project). The model's paths are
@@ -118,6 +171,7 @@ namespace xmaterial_instance::import
         //  4. its file name anywhere under the asset's folder (the parent of the model's folder when that is "source", "sources" or "src", else the
         //     model's folder; and when the path climbs out of it, "..\BuildingTextures\x.png", the folder it climbs to: an OBJ's .mtl names its
         //     textures relative to itself; never above the project), the one closest to the model's folder first
+        //  5. failing all that, the same search for a file whose name is a copy's of it ("x - Copy.png" for "x.png", either way: CopyKey)
         // A file name matches whatever its case, and .jpg/.jpeg (.tif/.tiff) match each other (NameKey). What a search found is logged (m_Info).
         std::wstring Resolve(const std::string& Raw) noexcept
         {
@@ -195,18 +249,23 @@ namespace xmaterial_instance::import
                 if (const auto Rel = Common.lexically_relative(Project); !Common.empty() && !Rel.empty() && !Rel.wstring().starts_with(L".."))
                     Root = Common;
             }
-            if (Found.empty())
+            const auto Closest = [&](auto&& KeyOf, const std::wstring& Want)
             {
+                fs::path    Best;
                 std::size_t BestDistance = SIZE_MAX;
                 for (auto It = fs::recursive_directory_iterator(Root, fs::directory_options::skip_permission_denied, Ec); !Ec && It != fs::recursive_directory_iterator(); It.increment(Ec))
                 {
                     std::error_code F;
-                    if (!It->is_regular_file(F) || NameKey(It->path().filename()) != Key) continue;
+                    if (!It->is_regular_file(F) || KeyOf(It->path().filename()) != Want) continue;
                     std::size_t Distance = 0;
                     for (const auto& Part : It->path().parent_path().lexically_relative(ModelDir)) { (void)Part; ++Distance; }
-                    if (Distance < BestDistance || (Distance == BestDistance && It->path() < Found)) { BestDistance = Distance; Found = It->path(); }
+                    if (Distance < BestDistance || (Distance == BestDistance && It->path() < Best)) { BestDistance = Distance; Best = It->path(); }
                 }
-            }
+                return Best;
+            };
+            if (Found.empty()) Found = Closest([](const fs::path& N) { return NameKey(N); }, Key);
+            // 5.
+            if (Found.empty()) Found = Closest([](const fs::path& N) { return CopyKey(N); }, CopyKey(Path.filename()));
 
             if (Found.empty())
             {
@@ -270,6 +329,24 @@ namespace xmaterial_instance::import
         template<typename T_WRITE>
         static void WriteIfChanged(const std::wstring& Path, T_WRITE&& Write) noexcept { xresource_pipeline::virtual_rsc::WriteIfChanged(Path, std::forward<T_WRITE>(Write)); }
 
+        // Whether the texture of a slot is gone: its descriptor does not exist (deleted as unused, or never made)
+        bool IsGoneTexture(const xrsc::texture_ref Texture) const noexcept
+        {
+            std::error_code Ec;
+            return !std::filesystem::exists(DescriptorFolder("Texture", Texture.m_Instance.m_Value) + L"\\Descriptor.txt", Ec);
+        }
+
+        // Whether a texture is only constants (no file in any of its mixes): what the import makes for a map the model does not have (a flat normal, the
+        // constant ORME, the diffuse color)
+        bool IsConstantTexture(const xrsc::texture_ref Texture) const noexcept
+        {
+            xtexture_rsc::descriptor     Descriptor;
+            xproperty::settings::context C;
+            if (Descriptor.Serialize(true, DescriptorFolder("Texture", Texture.m_Instance.m_Value) + L"\\Descriptor.txt", C)) return false;
+            const auto* pMix = std::get_if<xtexture_rsc::mix_source>(&Descriptor.m_InputVariant);
+            return pMix && std::ranges::all_of(pMix->m_Inputs, [](const xtexture_rsc::mix& E) { return E.m_CopyFrom == xtexture_rsc::compositing_from::CUSTOM_CONSTANT; });
+        }
+
         // Whether the generator made this texture: it is on the list of the earlier compile; with no list yet (a project from before the lists) a texture
         // whose Info links a Material Instance that links the geometry
         bool IsGenerated(const xrsc::texture_ref Texture) noexcept
@@ -321,12 +398,13 @@ namespace xmaterial_instance::import
             return Mix;
         }
 
-        static xtexture_rsc::mix Channel(const std::wstring& File, xtexture_rsc::compositing_from From, xtexture_rsc::compositing_to To) noexcept
+        static xtexture_rsc::mix Channel(const std::wstring& File, xtexture_rsc::compositing_from From, xtexture_rsc::compositing_to To, bool bInvert = false) noexcept
         {
             xtexture_rsc::mix Mix;
             Mix.m_CopyFrom = From;
             Mix.m_CopyTo   = To;
             Mix.m_FileName = File;
+            Mix.m_bInvert  = bInvert;
             return Mix;
         }
 
@@ -383,9 +461,28 @@ namespace xmaterial_instance::import
             const auto Opacity   = RawOpacity.empty() || RawOpacity == Param(M, "DiffuseMap") ? std::wstring{} : Resolve(RawOpacity);
             const auto RawHeight = Param(M, "HeightMap");
             const auto Normal    = !Param(M, "NormalMap").empty() ? Resolve(Param(M, "NormalMap")) : LooksLikeNormalMap(RawHeight) ? Resolve(RawHeight) : std::wstring{};
-            const auto Rough     = Resolve(Param(M, "RoughnessMap"));
-            const auto Metal     = Resolve(Param(M, "MetalnessMap"));
-            const auto AO        = Resolve(Param(M, "AmbientOcclusionMap"));
+            auto       Rough     = Resolve(Param(M, "RoughnessMap"));
+            auto       Gloss     = Rough.empty() ? Resolve(Param(M, "ShininessMap")) : std::wstring{};     // FBX's glossiness: the roughness upside down (R = 1 - Glossiness)
+            auto       Metal     = Resolve(Param(M, "MetalnessMap"));
+            auto       AO        = Resolve(Param(M, "AmbientOcclusionMap"));
+
+            // What the model does not name is looked for next to its color (or normal) map by name: Ch03_1001_Diffuse.png, Ch03_1001_Glossiness.png
+            {
+                const auto& Reference = !Diffuse.empty() ? Diffuse : Normal;
+                const auto  Guess = [&](std::wstring& Map, const char* pWhat, std::initializer_list<const wchar_t*> Tokens)
+                {
+                    if (!Map.empty()) return;
+                    Map = Sibling(Reference, Tokens);
+                    if (!Map.empty() && m_Info) m_Info(std::format("Import Materials: material {}: the {} map is not named by the model, {} next to its color map is taken", M.m_Name, pWhat, UTF8(Map)));
+                };
+                Guess(AO, "occlusion", { L"ambientocclusion", L"occlusion", L"ao" });
+                if (Rough.empty() && Gloss.empty())
+                {
+                    Guess(Rough, "roughness", { L"roughness", L"rough" });
+                    if (Rough.empty()) Guess(Gloss, "glossiness", { L"glossiness", L"gloss", L"smoothness" });
+                }
+                Guess(Metal, "metalness", { L"metallic", L"metalness", L"metal" });
+            }
             const auto Color     = Floats(Param(M, "DiffuseColor"),  { 1, 1, 1, 1 });
             const auto Emissive  = Floats(Param(M, "EmissiveColor"), { 0, 0, 0, 1 });
             const float Shininess = std::strtof(Param(M, "ShininessFactor").c_str(), nullptr);
@@ -508,6 +605,7 @@ namespace xmaterial_instance::import
             if (Usable(AO, "occlusion"))    { Mixes.push_back(Channel(AO,    from::R, to::R)); Key += "|ao:" + xstrtool::UTF16ToUTF8(AO); }
             else                              Mixes.push_back(Constant(1, to::R));
             if (Usable(Rough, "roughness")) { Mixes.push_back(Channel(Rough, bSharedRM ? from::G : from::R, to::G)); Key += "|r:" + xstrtool::UTF16ToUTF8(Rough); }
+            else if (Usable(Gloss, "glossiness")) { Mixes.push_back(Channel(Gloss, from::R, to::G, true)); Key += "|g:" + xstrtool::UTF16ToUTF8(Gloss); }
             else                            { Mixes.push_back(Constant(Roughness, to::G)); Key += std::format("|r{:.3f}", Roughness); }
             if (Usable(Metal, "metalness")) { Mixes.push_back(Channel(Metal, bSharedRM ? from::B : from::R, to::B)); Key += "|m:" + xstrtool::UTF16ToUTF8(Metal); }
             else                              Mixes.push_back(Constant(0, to::B));
@@ -517,7 +615,7 @@ namespace xmaterial_instance::import
             const bool bConstantORME = Size.empty();
             const auto ORME = Texture(Key, (bConstantORME ? M.m_Name : Stem(Size)) + " (ORME)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
             {
-                D.m_UsageType     = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
+                D.m_UsageType     = xtexture_rsc::usage_type::INTENSITY;         // data (occlusion, roughness, metalness, emission), not a color: no alpha coverage, no average-color fill
                 D.m_Compression   = bConstantORME ? xtexture_rsc::compression_format::RGBA_UNCOMPRESSED : m_Settings.ORME();
                 D.m_bSRGB         = false;
                 D.m_bGenerateMips = !bConstantORME;
@@ -550,16 +648,20 @@ namespace xmaterial_instance::import
             {
                 // An instance that exists is the user's, as a texture is: its base material, slots and params stay as they are. The one thing given to
                 // it is a texture that was missing: a slot that still holds the magenta placeholder takes the texture the model names, now that it is found.
+                // Likewise a slot that holds only constants (the flat normal, the constant ORME, the color of a model without a color map) takes the map
+                // that the model, or the files next to its color map, give now: the constants were what the import made for want of a map.
                 const xrsc::texture_ref Placeholder{ .m_Instance = xresource::instance_guid::GenerateGUIDCopy(std::format("{}_texture_missing_texture", GuidHex(m_Owner.m_Instance.m_Value)).c_str()) };
                 for (std::size_t j = 0; j < Existing.m_lTextureDefaults.size() && j < Existing.m_lTextures.size(); ++j)
                 {
-                    if (Existing.m_lTextures[j] != Placeholder) continue;
+                    const bool bPlaceholder = Existing.m_lTextures[j] == Placeholder || IsGoneTexture(Existing.m_lTextures[j]);      // a texture that is gone is a missing one
+                    if (!bPlaceholder && !IsConstantTexture(Existing.m_lTextures[j])) continue;
                     for (std::size_t i = 0; i < Fresh.m_lTextureDefaults.size() && i < Fresh.m_lTextures.size(); ++i)
-                        if (Fresh.m_lTextureDefaults[i].m_Name == Existing.m_lTextureDefaults[j].m_Name && Fresh.m_lTextures[i] != Placeholder)
-                        {
-                            Existing.m_lTextures[j] = Fresh.m_lTextures[i];
-                            if (m_Info) m_Info(std::format("Import Materials: material {}: its missing {} is found, the slot takes it", M.m_Name, Fresh.m_lTextureDefaults[i].m_Name));
-                        }
+                    {
+                        if (Fresh.m_lTextureDefaults[i].m_Name != Existing.m_lTextureDefaults[j].m_Name || Fresh.m_lTextures[i] == Placeholder || Fresh.m_lTextures[i] == Existing.m_lTextures[j]) continue;
+                        if (!bPlaceholder && IsConstantTexture(Fresh.m_lTextures[i])) continue;       // constants for constants: the user's stay
+                        Existing.m_lTextures[j] = Fresh.m_lTextures[i];
+                        if (m_Info) m_Info(std::format("Import Materials: material {}: its {} {} is found, the slot takes it", M.m_Name, bPlaceholder ? "missing" : "constant", Fresh.m_lTextureDefaults[i].m_Name));
+                    }
                 }
             }))
                 m_Warning(std::format("Import Materials: the descriptor of the instance {} could not be read: it is left as it is", M.m_Name));
