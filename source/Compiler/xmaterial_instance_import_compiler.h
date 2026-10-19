@@ -106,6 +106,13 @@ namespace xmaterial_instance::import
             else if (Ext == L".tiff") Ext = L".tif";
             return Fold(Name.stem().wstring()) + Ext;
         }
+        static bool IsImage(const std::filesystem::path& Name) noexcept
+        {
+            const auto Ext = Fold(Name.extension().wstring());
+            for (const wchar_t* pExt : { L".png", L".jpg", L".jpeg", L".tga", L".bmp", L".tif", L".tiff", L".dds", L".hdr", L".exr", L".psd", L".gif", L".webp" })
+                if (Ext == pExt) return true;
+            return false;
+        }
         // NameKey without what a file manager or a download adds to a copy's name: "x - Copy", "x - Copy (2)", "x (1)", "x_copy", "x-copy". The last resort of Resolve:
         // the texture the model names is next to it under such a name
         static std::wstring CopyKey(const std::filesystem::path& Name) noexcept
@@ -171,7 +178,8 @@ namespace xmaterial_instance::import
         //  4. its file name anywhere under the asset's folder (the parent of the model's folder when that is "source", "sources" or "src", else the
         //     model's folder; and when the path climbs out of it, "..\BuildingTextures\x.png", the folder it climbs to: an OBJ's .mtl names its
         //     textures relative to itself; never above the project), the one closest to the model's folder first
-        //  5. failing all that, the same search for a file whose name is a copy's of it ("x - Copy.png" for "x.png", either way: CopyKey)
+        //  5. failing all that, the same search for the same name in another image format ("x.png" for "x.tga": a texture converted after the export)
+        //  6. failing that, the same search for a file whose name is a copy's of it ("x - Copy.png" for "x.png", either way: CopyKey)
         // A file name matches whatever its case, and .jpg/.jpeg (.tif/.tiff) match each other (NameKey). What a search found is logged (m_Info).
         std::wstring Resolve(const std::string& Raw) noexcept
         {
@@ -264,7 +272,10 @@ namespace xmaterial_instance::import
                 return Best;
             };
             if (Found.empty()) Found = Closest([](const fs::path& N) { return NameKey(N); }, Key);
-            // 5.
+            // 5. the same name in another image format (the model names "x.tga", the textures were converted to "x.png")
+            if (Found.empty())
+                Found = Closest([](const fs::path& N) { return IsImage(N) ? Fold(N.stem().wstring()) : std::wstring(); }, Fold(Path.stem().wstring()));
+            // 6.
             if (Found.empty()) Found = Closest([](const fs::path& N) { return CopyKey(N); }, CopyKey(Path.filename()));
 
             if (Found.empty())
