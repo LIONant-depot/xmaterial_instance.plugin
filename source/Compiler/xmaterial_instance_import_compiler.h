@@ -25,6 +25,8 @@
 #include <cstdio>
 #include <cwctype>
 #include <filesystem>
+#include <set>
+#include <unordered_map>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -46,10 +48,22 @@ namespace xmaterial_instance::import
         std::function<void(std::string)>    m_Info;                 // optional: where a texture the model names was found, when it was looked for
 
         // One instance per material, in the order of the list
-        void Emit(const std::vector<xraw3d::geom::material_instance>& Materials) noexcept
+        void Emit(const std::vector<xraw3d::geom::material_instance>& Materials, const std::vector<xraw3d::geom::facet>& Facets = {}) noexcept
         {
             m_bHadList = m_Previous.Load(m_OwnerFolder);
-            for (auto& M : Materials) EmitMaterial(M);
+
+            // The main material: of the ones the model gives no map at all, the one that covers the most of the model. It is the one the files named after the model are
+            // for ("Velociraptor_Cor.jpeg"); the others take the maps nobody took (the feathers of a raptor are not its skin)
+            std::vector<int> Count(Materials.size(), 0);
+            for (const auto& F : Facets) if (F.m_iMaterialInstance >= 0 && F.m_iMaterialInstance < static_cast<int>(Count.size())) ++Count[F.m_iMaterialInstance];
+            m_Main.clear();
+            for (int Best = -1; const auto& M : Materials)
+                if (!M.m_Name.ends_with("|Dupli") && !HasModelMaps(M) && Count[&M - Materials.data()] > Best) { Best = Count[&M - Materials.data()]; m_Main = M.m_Name; }
+
+            // The main one first, the other materials, the instanced ones last: each is given the maps the ones before it did not take
+            for (auto& M : Materials) if (M.m_Name == m_Main)                                         EmitMaterial(M);
+            for (auto& M : Materials) if (M.m_Name != m_Main && !M.m_Name.ends_with("|Dupli"))        EmitMaterial(M);
+            for (auto& M : Materials) if (M.m_Name.ends_with("|Dupli"))                               EmitMaterial(M);
 
             // The textures the model names that are not there: each was warned of where it was looked for, and the sum of them (a problem of the compile)
             if (!m_Missing.empty())
@@ -72,9 +86,17 @@ namespace xmaterial_instance::import
 
         std::map<std::string, xrsc::texture_ref>    m_Textures;     // by what they are made of: a texture several materials share is made once
         std::vector<std::string>                    m_Missing;      // the textures the model names that Resolve did not find (once each)
+        std::set<std::wstring>                      m_Claimed;      // the maps (folded project paths) the materials took: what FindUnclaimed leaves
 
         xresource_pipeline::virtual_rsc::owned_list m_Previous;     // what the earlier compile of the geometry made (Virtual.txt)
         bool                                        m_bHadList = false;
+
+        // Whether the model gives the material a map of its own (a texture link)
+        static bool HasModelMaps(const xraw3d::geom::material_instance& M) noexcept
+        {
+            for (auto& P : M.m_Params) if (P.m_Type == xraw3d::geom::material_instance::params_type::TEXTURE && !P.m_Value.empty()) return true;
+            return false;
+        }
 
         static std::string Param(const xraw3d::geom::material_instance& M, std::string_view Name) noexcept
         {
@@ -442,6 +464,116 @@ namespace xmaterial_instance::import
             return Lower.ends_with("_n");
         }
 
+        // A material the model gives no map for (an FBX that lost its texture links) may still have its maps next to the model, named after the material
+        // or after the model: "ControlPanel_Albedo.png" for the material ControlPanel, "VelociraptorNormal.jpeg" for Velociraptor.fbx. For each name in turn
+        // (the material's first), the first of the role's words that has a file wins, with "_", "-", " " or nothing between the two (the closest to the
+        // model's folder, any image format, any case). Empty when there is none
+        std::wstring FindByName(const std::vector<std::wstring>& Names, std::initializer_list<const char*> Words) const noexcept
+        {
+            namespace fs = std::filesystem;
+            const fs::path Project  = fs::path(m_ProjectPath).lexically_normal();
+            const fs::path ModelDir = (Project / m_ModelPath).lexically_normal().parent_path();
+            fs::path       Root     = ModelDir;
+            if (const auto Name = Fold(ModelDir.filename().wstring()); Name == L"source" || Name == L"sources" || Name == L"src")
+                if (const auto Up = ModelDir.parent_path(); !Up.lexically_relative(Project).empty() && !Up.lexically_relative(Project).wstring().starts_with(L".."))
+                    Root = Up;
+
+            // Every image under the asset's folder, by its name (the closest to the model's folder when several share it)
+            struct found { fs::path m_Path; std::size_t m_Distance; };
+            std::unordered_map<std::wstring, found> Images;
+            std::error_code Ec;
+            for (auto It = fs::recursive_directory_iterator(Root, fs::directory_options::skip_permission_denied, Ec); !Ec && It != fs::recursive_directory_iterator(); It.increment(Ec))
+            {
+                std::error_code F;
+                if (!It->is_regular_file(F) || !IsImage(It->path())) continue;
+                std::size_t Distance = 0;
+                for (const auto& Part : It->path().parent_path().lexically_relative(ModelDir)) { (void)Part; ++Distance; }
+                auto& Slot = Images[Fold(It->path().stem().wstring())];
+                if (Slot.m_Path.empty() || Distance < Slot.m_Distance || (Distance == Slot.m_Distance && It->path() < Slot.m_Path)) Slot = { It->path(), Distance };
+            }
+
+            for (const auto& Name : Names)
+            {
+                if (Name.empty()) continue;
+                for (const char* pWord : Words)
+                    for (const wchar_t* pSeparator : { L"_", L"-", L" ", L"" })
+                    {
+                        const auto It = Images.find(Fold(Name) + pSeparator + xstrtool::UTF8ToUTF16(pWord));
+                        if (It == Images.end()) continue;
+                        const auto Relative = fs::relative(It->second.m_Path, Project, Ec).lexically_normal().make_preferred().wstring();
+                        if (!Ec && !Relative.starts_with(L"..")) return Relative;
+                    }
+            }
+            return {};
+        }
+
+        // The maps of the model's folders that no material took, grouped by their name ("FeatherAlpha.png" and "FeatherNormal.jpeg" are the set "Feather"): the set that
+        // has an opacity map. What the instanced cards of a particle system are drawn with when the model gives them no maps of their own
+        struct unclaimed { std::wstring m_Diffuse, m_Normal, m_Rough, m_Gloss, m_Metal, m_AO, m_Opacity, m_Emissive; };
+        std::map<std::string, unclaimed> m_Taken;      // the unclaimed maps a material took (its instanced cards take the same)
+        std::string                      m_Main;       // the main material (see Emit)
+        unclaimed FindUnclaimed() const noexcept
+        {
+            namespace fs = std::filesystem;
+            const fs::path Project  = fs::path(m_ProjectPath).lexically_normal();
+            const fs::path ModelDir = (Project / m_ModelPath).lexically_normal().parent_path();
+            fs::path       Root     = ModelDir;
+            if (const auto Name = Fold(ModelDir.filename().wstring()); Name == L"source" || Name == L"sources" || Name == L"src")
+                if (const auto Up = ModelDir.parent_path(); !Up.lexically_relative(Project).empty() && !Up.lexically_relative(Project).wstring().starts_with(L".."))
+                    Root = Up;
+
+            struct role { std::wstring unclaimed::* m_Member; std::vector<std::wstring> m_Words; };
+            const std::vector<role> Roles =
+            { { &unclaimed::m_Opacity,  { L"opacity", L"alpha", L"mask" } }
+            , { &unclaimed::m_Normal,   { L"normalmap", L"normal", L"nrm", L"norm" } }
+            , { &unclaimed::m_Rough,    { L"roughness", L"rough" } }
+            , { &unclaimed::m_Gloss,    { L"glossiness", L"gloss", L"smoothness" } }
+            , { &unclaimed::m_Metal,    { L"metalness", L"metallic", L"metal" } }
+            , { &unclaimed::m_AO,       { L"ambientocclusion", L"occlusion", L"ao" } }
+            , { &unclaimed::m_Emissive, { L"emissive", L"emission", L"emit" } }
+            , { &unclaimed::m_Diffuse,  { L"basecolor", L"base_color", L"albedo", L"diffuse", L"colour", L"color", L"cor", L"diff", L"col" } }
+            };
+
+            std::map<std::wstring, unclaimed> Sets;
+            std::error_code                   Ec;
+            for (auto It = fs::recursive_directory_iterator(Root, fs::directory_options::skip_permission_denied, Ec); !Ec && It != fs::recursive_directory_iterator(); It.increment(Ec))
+            {
+                std::error_code F;
+                if (!It->is_regular_file(F) || !IsImage(It->path())) continue;
+                const auto Relative = fs::relative(It->path(), Project, F).lexically_normal().make_preferred().wstring();
+                if (F || Relative.starts_with(L"..") || m_Claimed.contains(Fold(Relative))) continue;
+
+                const std::wstring Stem = Fold(It->path().stem().wstring());
+                for (const auto& Role : Roles)
+                {
+                    bool bFound = false;
+                    for (const auto& Word : Role.m_Words)
+                    {
+                        if (Stem.size() <= Word.size() || !Stem.ends_with(Word)) continue;
+                        std::wstring Base = Stem.substr(0, Stem.size() - Word.size());
+                        while (!Base.empty() && (Base.back() == L'_' || Base.back() == L'-' || Base.back() == L' ' || Base.back() == L'.')) Base.pop_back();
+                        if (Base.empty()) continue;
+                        auto& Member = Sets[Base].*Role.m_Member;
+                        if (Member.empty()) Member = Relative;
+                        bFound = true;
+                        break;
+                    }
+                    if (bFound) break;
+                }
+            }
+            for (const auto& [Base, Set] : Sets) if (!Set.m_Opacity.empty()) return Set;
+            return {};
+        }
+
+        // What a map is, told by its file name: a model's shininess slot holds a glossiness or a roughness, and only the name knows ("x_Rough.png" in the
+        // slot of an FBX's shininess is a roughness). xLION is roughness based: a roughness is used as it is, only a glossiness is turned upside down
+        static bool NameHas(const std::wstring& Path, std::initializer_list<const char*> Words) noexcept
+        {
+            const auto Lower = xstrtool::ToLowerCopy(std::filesystem::path(Path).stem().string());
+            for (auto* p : Words) if (Lower.find(p) != std::string::npos) return true;
+            return false;
+        }
+
         // The material's template of slots (the material compiler leaves it in its log)
         bool LoadTemplate(xmaterial_instance::descriptor& D, xrsc::material_ref Material) noexcept
         {
@@ -466,16 +598,67 @@ namespace xmaterial_instance::import
             //
             // What the model gives
             //
+            const bool bInstanced = M.m_Name.ends_with("|Dupli");      // the instances of a particle system (see xraw3d's ImportMaterials)
+            const bool bModelSet  = !bInstanced && (m_Main.empty() || M.m_Name == m_Main || HasModelMaps(M));      // the files named after the model are for this material
             const auto RawDiffuse = Param(M, "DiffuseMap");
-            const auto Diffuse   = Resolve(RawDiffuse);
+            auto       Diffuse   = Resolve(RawDiffuse);
             const auto RawOpacity = Param(M, "OpacityMap");
-            const auto Opacity   = RawOpacity.empty() || RawOpacity == Param(M, "DiffuseMap") ? std::wstring{} : Resolve(RawOpacity);
+            auto       Opacity   = RawOpacity.empty() || RawOpacity == Param(M, "DiffuseMap") ? std::wstring{} : Resolve(RawOpacity);
             const auto RawHeight = Param(M, "HeightMap");
-            const auto Normal    = !Param(M, "NormalMap").empty() ? Resolve(Param(M, "NormalMap")) : LooksLikeNormalMap(RawHeight) ? Resolve(RawHeight) : std::wstring{};
+            auto       Normal    = !Param(M, "NormalMap").empty() ? Resolve(Param(M, "NormalMap")) : LooksLikeNormalMap(RawHeight) ? Resolve(RawHeight) : std::wstring{};
             auto       Rough     = Resolve(Param(M, "RoughnessMap"));
             auto       Gloss     = Rough.empty() ? Resolve(Param(M, "ShininessMap")) : std::wstring{};     // FBX's glossiness: the roughness upside down (R = 1 - Glossiness)
+            if (!Gloss.empty() && NameHas(Gloss, { "rough" })) std::swap(Rough, Gloss);                  // ... unless its name says it is a roughness: nothing to do then
+            if (!Rough.empty() && NameHas(Rough, { "gloss", "smooth" })) std::swap(Rough, Gloss);       // and a glossiness in the roughness slot is turned over
             auto       Metal     = Resolve(Param(M, "MetalnessMap"));
             auto       AO        = Resolve(Param(M, "AmbientOcclusionMap"));
+
+            // What the model gives no map for is looked for by the material's own name: ControlPanel_Albedo.png for the material ControlPanel
+            auto EmissiveMapFile = Resolve(Param(M, "EmissiveMap"));
+            {
+                const auto ByName = [&](std::wstring& Map, const char* pWhat, std::initializer_list<const char*> Words)
+                {
+                    if (!Map.empty() || bInstanced) return;      // (the instanced cards are given the unclaimed maps below)
+                    Map = FindByName({ xstrtool::UTF8ToUTF16(M.m_Name), bModelSet ? std::filesystem::path(m_ModelPath).stem().wstring() : std::wstring{} }, Words);
+                    if (!Map.empty() && m_Info) m_Info(std::format("Import Materials: material {}: the {} map is not named by the model, {} (named after the material or the model) is taken", M.m_Name, pWhat, UTF8(Map)));
+                };
+                if (RawDiffuse.empty())                                    ByName(Diffuse, "color",  { "albedo", "basecolor", "base_color", "diffuse", "color", "colour", "cor", "diff", "col" });
+                if (Param(M, "NormalMap").empty() && Normal.empty())       ByName(Normal,  "normal", { "normal", "normalmap", "nrm", "norm" });
+                if (Rough.empty() && Gloss.empty())
+                {
+                    ByName(Rough, "roughness", { "roughness", "rough" });
+                    if (Rough.empty()) ByName(Gloss, "glossiness", { "glossiness", "gloss", "smoothness" });
+                }
+                ByName(Metal, "metalness", { "metallic", "metalness", "metal" });
+                ByName(AO, "occlusion", { "ambientocclusion", "occlusion", "ao" });
+                ByName(EmissiveMapFile, "emissive", { "emissive", "emission", "emit" });
+            }
+
+            // The maps for the materials that are not the main one (and the instanced cards of any): those no other material took. A material with its own maps, or
+            // maps named after it, keeps them: only its gaps are filled
+            if (bInstanced || !bModelSet)
+            {
+                unclaimed U;
+                if (const auto It = bInstanced ? m_Taken.find(M.m_Name.substr(0, M.m_Name.size() - 6)) : m_Taken.end(); It != m_Taken.end()) U = It->second;
+                else                                                                                                                     U = FindUnclaimed();
+                const auto Take = [&](std::wstring& Map, const std::wstring& From, const char* pWhat)
+                {
+                    if (!Map.empty() || From.empty()) return;
+                    Map = From;
+                    if (m_Info) m_Info(std::format("Import Materials: material {}: the {} map is not named by the model, {} (no other material has it) is taken", M.m_Name, pWhat, UTF8(Map)));
+                };
+                Take(Diffuse, U.m_Diffuse, "color");  Take(Normal, U.m_Normal, "normal");   Take(Rough, U.m_Rough, "roughness"); Take(Gloss, U.m_Gloss, "glossiness");
+                Take(Metal, U.m_Metal, "metalness");  Take(AO, U.m_AO, "occlusion");        Take(Opacity, U.m_Opacity, "opacity");
+                // A map named alpha that has an alpha channel of its own is the color map with its cut-out ("FeatherAlpha.png": black feathers, their shape in the alpha),
+                // not a mask in the red channel
+                if (Diffuse.empty() && !Opacity.empty() && HasCutOut(Opacity))
+                {
+                    Diffuse = Opacity;
+                    Opacity.clear();
+                    if (m_Info) m_Info(std::format("Import Materials: material {}: {} has its own alpha channel: it is the color map, with its cut-out", M.m_Name, UTF8(Diffuse)));
+                }
+                if (!bInstanced) { U.m_Diffuse = Diffuse; U.m_Normal = Normal; U.m_Rough = Rough; U.m_Gloss = Gloss; U.m_Metal = Metal; U.m_AO = AO; U.m_Opacity = Opacity; m_Taken[M.m_Name] = U; }
+            }
 
             // What the model does not name is looked for next to its color (or normal) map by name: Ch03_1001_Diffuse.png, Ch03_1001_Glossiness.png
             {
@@ -494,6 +677,8 @@ namespace xmaterial_instance::import
                 }
                 Guess(Metal, "metalness", { L"metallic", L"metalness", L"metal" });
             }
+            if (!bInstanced)
+                for (const auto* pMap : { &Diffuse, &Normal, &Rough, &Gloss, &Metal, &AO, &Opacity, &EmissiveMapFile }) if (!pMap->empty()) m_Claimed.insert(Fold(*pMap));
             const auto Color     = Floats(Param(M, "DiffuseColor"),  { 1, 1, 1, 1 });
             const auto Emissive  = Floats(Param(M, "EmissiveColor"), { 0, 0, 0, 1 });
             const float Shininess = std::strtof(Param(M, "ShininessFactor").c_str(), nullptr);
@@ -508,13 +693,7 @@ namespace xmaterial_instance::import
             xrsc::texture_ref Albedo;
             if (!Diffuse.empty())
             {
-                const auto DI = Info(Diffuse);
-                const auto OI = Opacity.empty() ? image_info{} : Info(Opacity);
-                if (!Opacity.empty() && (OI.m_Width != DI.m_Width || OI.m_Height != DI.m_Height))
-                {
-                    m_Warning(std::format("Import Materials: material {}: the opacity map {} is not the size of the color map, it is not used", M.m_Name, xstrtool::UTF16ToUTF8(Opacity)));
-                }
-                else if (!Opacity.empty())
+                if (!Opacity.empty())      // (maps of another size are brought to the largest by the texture compiler)
                 {
                     bAlphaTest = true;
                     Albedo = Texture(xstrtool::UTF16ToUTF8(Diffuse + L"|" + Opacity), Stem(Diffuse) + " (color, cut out)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
@@ -546,6 +725,19 @@ namespace xmaterial_instance::import
                         D.m_InputVariant = Single(Diffuse);
                     });
                 }
+            }
+            else if (RawDiffuse.empty() && !Opacity.empty())
+            {
+                // A cut-out with no color map (feathers): the color the model gives the material, with the opacity map in the alpha
+                bAlphaTest = true;
+                const auto C = EmissiveMax > 0 ? std::array{ Emissive[0] / EmissiveMax, Emissive[1] / EmissiveMax, Emissive[2] / EmissiveMax } : std::array{ Color[0], Color[1], Color[2] };
+                Albedo = Texture(std::format("color_{:.3f}_{:.3f}_{:.3f}|{}", C[0], C[1], C[2], xstrtool::UTF16ToUTF8(Opacity)), Stem(Opacity) + " (color, cut out)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
+                {
+                    D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
+                    D.m_Compression          = m_Settings.AlbedoAlpha();
+                    D.m_bFillAveColorByAlpha = true;
+                    D.m_InputVariant         = Mixed({ Constant(C[0], to::R), Constant(C[1], to::G), Constant(C[2], to::B), Channel(Opacity, from::R, to::A) });
+                });
             }
             else if (!RawDiffuse.empty())
             {
@@ -598,16 +790,12 @@ namespace xmaterial_instance::import
             const float Roughness = Shininess > 0 ? std::sqrt(2.0f / (Shininess + 2.0f)) : 0.8f;   // Blinn-Phong exponent to roughness
             const float Emission  = EmissiveMax > 0 ? 1.0f : 0.0f;
 
-            std::wstring Size;  // the first map's size every other map must have
-            image_info   SizeInfo;
-            auto Usable = [&](const std::wstring& Path, const char* pWhat) -> bool
+            std::wstring Size;  // the first map (it names the texture): the texture compiler brings maps of other sizes to the largest
+            auto Usable = [&](const std::wstring& Path, const char*) -> bool
             {
                 if (Path.empty()) return false;
-                const auto I = Info(Path);
-                if (Size.empty()) { Size = Path; SizeInfo = I; return true; }
-                if (I.m_Width == SizeInfo.m_Width && I.m_Height == SizeInfo.m_Height) return true;
-                m_Warning(std::format("Import Materials: material {}: the {} map {} is not the size of {}, it is not used", M.m_Name, pWhat, xstrtool::UTF16ToUTF8(Path), xstrtool::UTF16ToUTF8(Size)));
-                return false;
+                if (Size.empty()) Size = Path;
+                return true;
             };
 
             std::vector<xtexture_rsc::mix> Mixes;
@@ -620,8 +808,8 @@ namespace xmaterial_instance::import
             else                            { Mixes.push_back(Constant(Roughness, to::G)); Key += std::format("|r{:.3f}", Roughness); }
             if (Usable(Metal, "metalness")) { Mixes.push_back(Channel(Metal, bSharedRM ? from::B : from::R, to::B)); Key += "|m:" + xstrtool::UTF16ToUTF8(Metal); }
             else                              Mixes.push_back(Constant(0, to::B));
-            Mixes.push_back(Constant(Emission, to::A));
-            Key += std::format("|e{:.0f}", Emission);
+            if (Usable(EmissiveMapFile, "emissive")) { Mixes.push_back(Channel(EmissiveMapFile, from::G, to::A)); Key += "|e:" + xstrtool::UTF16ToUTF8(EmissiveMapFile); }   // ponytail: G carries most of the luminance, a mix source for it would do better
+            else                                      { Mixes.push_back(Constant(Emission, to::A));                Key += std::format("|e{:.0f}", Emission); }
 
             const bool bConstantORME = Size.empty();
             const auto ORME = Texture(Key, (bConstantORME ? M.m_Name : Stem(Size)) + " (ORME)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
