@@ -10,6 +10,7 @@
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_command_guids.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_intance_descriptor.h"
+#include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_carry.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_runtime.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_runtime.h"
@@ -22,8 +23,9 @@ namespace xmaterial_instance_editor
 {
     //--------------------------------------------------------------------------------------------
     // SetMaterial: picks the material the instance is made from. The material's own textures become the instance's defaults, so this is more than
-    // setting one property: the compiler leaves a template of the material's textures in its log, which is read into the descriptor. Undo puts the
-    // whole descriptor back.
+    // setting one property: the compiler leaves a template of the material's textures in its log, which is read into the descriptor. The textures the person
+    // assigned come along to the slots of the new material that have the same name; the rest start from the new material's defaults. Undo puts the whole
+    // descriptor back.
     //--------------------------------------------------------------------------------------------
     struct set_material_cmd : xundo::command_base
     {
@@ -55,10 +57,30 @@ namespace xmaterial_instance_editor
 
             xtextfile::stream File;
             if (auto Err = File.Open(true, Path, xtextfile::file_type::TEXT); Err) return "the material has no template yet (compile the material first)";
+
+            // What the person assigned in the instance, by what each slot is for: it is put in the slots of the new material that are for the same (xmaterial_instance_carry.h)
+            std::vector<std::string>        OldNames;
+            std::vector<bool>               OldAssigned;
+            std::vector<xrsc::texture_ref>  OldTextures;
+            for (const auto& E : D.m_lTextureDefaults)
+            {
+                const auto i = static_cast<std::size_t>(&E - D.m_lTextureDefaults.data());
+                if (i >= D.m_lTextures.size() || E.m_Index < 0 || static_cast<std::size_t>(E.m_Index) >= D.m_lFinalTextures.size()) continue;
+                OldNames.push_back(E.m_Name);
+                OldTextures.push_back(D.m_lTextures[i]);
+                OldAssigned.push_back(!D.m_lTextures[i].empty() && D.m_lTextures[i] != D.m_lFinalTextures[E.m_Index].m_TextureRef);
+            }
+
             xproperty::settings::context Context;
             if (auto Err = xproperty::sprop::serializer::Stream(File, D, Context); Err) return "the material's template could not be read";
             D.m_MaterialRef = Material;
             D.setupDefaults();
+
+            std::vector<std::string> NewNames;
+            for (const auto& E : D.m_lTextureDefaults) NewNames.push_back(E.m_Name);
+            const auto Match = xmaterial_instance::MatchCarriedTextures(OldNames, OldAssigned, NewNames);
+            for (std::size_t i = 0; i < Match.size() && i < D.m_lTextures.size(); ++i)
+                if (Match[i] >= 0) D.m_lTextures[i] = OldTextures[static_cast<std::size_t>(Match[i])];
             return {};
         }
 
