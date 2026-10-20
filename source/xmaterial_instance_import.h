@@ -31,6 +31,14 @@ namespace xmaterial_instance::import
         xtexture_rsc::compression_format_tangent_normal     m_NormalCompression      = xtexture_rsc::compression_format_tangent_normal::RG_BC5;
         xtexture_rsc::compression_format_color_a            m_ORMECompression        = xtexture_rsc::compression_format_color_a::RGBA_BC7;
 
+        // The models of some tools have the Y of their normal maps the other way (DirectX against OpenGL): the normal maps made from the model are flipped. Changing it in
+        // a geometry editor puts it on the normal maps already made too (SetFlipNormalY), so only those are compiled again.
+        bool                    m_bFlipNormalY  = false;
+
+        // Some models have normals that are bent (not of length one): the normal maps made from the model are normalized before they are compressed (the texture's own
+        // Normalize Normals, on by default). The same as the flip: changing it in a geometry editor puts it on the normal maps already made (SetNormalizeNormals).
+        bool                    m_bNormalizeNormals = true;
+
         // (the enums of the subsets have the values of the texture's own compression_format)
         xtexture_rsc::compression_format Albedo()      const noexcept { return static_cast<xtexture_rsc::compression_format>(m_AlbedoCompression); }
         xtexture_rsc::compression_format AlbedoAlpha() const noexcept { return static_cast<xtexture_rsc::compression_format>(m_AlbedoAlphaCompression); }
@@ -52,6 +60,8 @@ namespace xmaterial_instance::import
         , obj_member<"AlbedoCompression",      &settings::m_AlbedoCompression,      member_enum_span<xtexture_rsc::compression_format_color_v>,          member_help<"The compression of the color maps (no alpha). For the textures made from now on">>
         , obj_member<"AlbedoAlphaCompression", &settings::m_AlbedoAlphaCompression, member_enum_span<xtexture_rsc::compression_format_color_a_v>,        member_help<"The compression of the color maps that cut out (color and alpha). For the textures made from now on">>
         , obj_member<"NormalCompression",      &settings::m_NormalCompression,      member_enum_span<xtexture_rsc::compression_format_tangent_normal_v>, member_help<"The compression of the normal maps. For the textures made from now on">>
+        , obj_member<"Flip Y for normals",     &settings::m_bFlipNormalY,           member_help<"Flip the Y (green) of the normal maps the import makes, for a model whose normal maps are the other convention (DirectX against OpenGL). Changing it flips the normal maps already made too, and only those are compiled again: the geometry does not have to be">>
+        , obj_member<"Normalize normals",      &settings::m_bNormalizeNormals,      member_help<"Normalize the normal maps the import makes before they are compressed, for a model whose normals are bent (not of length one). Changing it puts it on the normal maps already made too, and only those are compiled again: the geometry does not have to be">>
         , obj_member<"ORMECompression",        &settings::m_ORMECompression,        member_enum_span<xtexture_rsc::compression_format_color_a_v>,        member_help<"The compression of the occlusion/roughness/metalness/emission maps (packed in one texture). For the textures made from now on">>
         )
     };

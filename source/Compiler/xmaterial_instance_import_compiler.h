@@ -773,6 +773,8 @@ namespace xmaterial_instance::import
                     D.m_UsageType    = xtexture_rsc::usage_type::TANGENT_NORMAL;
                     D.m_Compression  = m_Settings.Normal();
                     D.m_bSRGB        = false;
+                    D.m_bNormalMapFlipY = m_Settings.m_bFlipNormalY;
+                    D.m_bNormalizeNormals = m_Settings.m_bNormalizeNormals;
                     D.m_InputVariant = Single(Normal);
                 })
                 : Texture("flat_normal", "Flat normal", InstanceGuid, [&](xtexture_rsc::descriptor& D)

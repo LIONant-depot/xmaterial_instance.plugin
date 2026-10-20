@@ -13,6 +13,8 @@
 //      DuplicateImportedMaterial -Slot i -Instance hex
 //      RemoveUnusedImportedResources               takes away what the import made and the model no longer needs (xeditor_virtual_resources.h)
 //      ApplyImportCompressions                     sets the compression of the generated textures to the ImportMaterials settings (undoable)
+//      SetFlipNormalY -On true|false               the setting "Flip Y for normals", and the normal maps already made take it: only those are compiled again
+//      SetNormalizeNormals -On true|false          the same for "Normalize normals"
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
 #include "source/Tools/Editor/xeditor_virtual_resources.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_commands_assets.h"
@@ -276,6 +278,128 @@ namespace xmaterial_instance::import::editor
     };
 
     //--------------------------------------------------------------------------------------------
+    // SetFlipNormalY and SetNormalizeNormals: the settings of the normal maps made from the model (flip their Y, normalize them). A texture is made once and is the user's
+    // after that, so a setting alone would only reach the normal maps made from now on: the command sets it and puts it on the normal maps the geometry already made.
+    // Their descriptors change, and the file watcher compiles those textures again - nothing else: not the geometry, not the other maps. Undo puts the setting and the
+    // descriptors back. One command, two instances: each is a setting of the import and the option of the texture it becomes.
+    //--------------------------------------------------------------------------------------------
+    struct set_normal_option_cmd : xundo::command_base
+    {
+        using setting_ptr = bool settings::*;
+        using texture_ptr = bool xtexture_rsc::descriptor::*;
+
+        xeditor::descriptor_document&   m_Doc;
+        get_slots_fn                    m_GetSlots;
+        const char*                     m_pName;
+        const char*                     m_pHelp;
+        setting_ptr                     m_Setting;          // the setting of the import
+        texture_ptr                     m_Texture;          // what it is in the descriptor of the normal map
+
+        set_normal_option_cmd(xundo::system& System, xeditor::descriptor_document& Doc, get_slots_fn GetSlots, const char* pName, const char* pHelp, setting_ptr Setting, texture_ptr Texture) noexcept
+            : command_base(System, pName, nullptr), m_Doc(Doc), m_GetSlots(GetSlots), m_pName(pName), m_pHelp(pHelp), m_Setting(Setting), m_Texture(Texture) { RegisterArguments(); }
+
+        const char* getCommandHelp() const noexcept override { return m_pHelp; }
+        void RegisterArguments() noexcept override { m_hOn = m_Parser.addOption("On", "true or false", true, 1); }
+
+        static bool ParseOn(const std::string& On, bool& bOn) noexcept
+        {
+            if (On != "true" && On != "false" && On != "1" && On != "0") return false;
+            bOn = On == "true" || On == "1";
+            return true;
+        }
+
+        // A normal map the model gave (a map of constants is the flat normal: its options change nothing)
+        static bool isModelNormalMap(const xtexture_rsc::descriptor& D) noexcept
+        {
+            if (D.m_UsageType != xtexture_rsc::usage_type::TANGENT_NORMAL) return false;
+            if (const auto* pMix = std::get_if<xtexture_rsc::mix_source>(&D.m_InputVariant))
+            {
+                bool bConstant = true;
+                for (auto& M : pMix->m_Inputs) bConstant = bConstant && M.m_CopyFrom == xtexture_rsc::compositing_from::CUSTOM_CONSTANT;
+                if (bConstant) return false;
+            }
+            return true;
+        }
+
+        struct change { std::wstring m_Path; std::string m_Before; };
+
+        // The descriptors of the generated normal maps that do not have the option the way it is asked, with their text now
+        std::vector<change> Changes(bool bWant) const noexcept
+        {
+            std::vector<change> List;
+            if (!m_Doc.isLoaded()) return List;
+            for (auto& Guid : xresource_editor::g_LibMgr.VirtualDescendantsOf(m_Doc.m_LibraryGuid, m_Doc.m_Guid))
+            {
+                if (Guid.m_Type != xrsc::texture_type_guid_v) continue;
+                std::wstring InfoPath;
+                xresource_editor::g_LibMgr.getNodeInfo(m_Doc.m_LibraryGuid, Guid, [&](xresource_editor::library_db::info_node& Node) { InfoPath = Node.m_Path; });
+                if (InfoPath.empty()) continue;
+
+                const auto Path = (std::filesystem::path(InfoPath).parent_path() / L"Descriptor.txt").wstring();
+                xtexture_rsc::descriptor D;
+                xproperty::settings::context Context;
+                if (D.Serialize(true, Path, Context)) continue;
+                if (!isModelNormalMap(D) || D.*m_Texture == bWant) continue;
+
+                std::ifstream In(std::filesystem::path(Path), std::ios::binary);
+                List.push_back({ Path, std::string(std::istreambuf_iterator<char>(In), {}) });
+            }
+            return List;
+        }
+
+        std::string Redo() noexcept override
+        {
+            std::string On; bool bOn = false;
+            if (!xeditor::cmd_util::GetArg(m_Parser, m_hOn, On) || !ParseOn(On, bOn)) return std::string(m_pName) + ": bad arguments";
+            if (!m_Doc.isLoaded()) return std::string(m_pName) + ": nothing loaded";
+
+            m_GetSlots(*m_Doc.m_pDescriptor).m_pSettings->*m_Setting = bOn;
+            m_Doc.m_bDirty = true;
+            for (auto& C : Changes(bOn))
+            {
+                xtexture_rsc::descriptor D;
+                xproperty::settings::context Context;
+                if (D.Serialize(true, C.m_Path, Context)) continue;
+                D.*m_Texture = bOn;
+                xproperty::settings::context Out;
+                D.Serialize(false, C.m_Path, Out);              // the file watcher compiles the texture again
+            }
+            return {};
+        }
+
+        // An inspector edit has already flipped the checkbox: the state to come back to has it the other way. And the descriptors as they are now.
+        void BackupCurrenState(xundo::undo_file& File) noexcept override
+        {
+            std::string On; bool bNew = false;
+            if (!m_Doc.isLoaded() || !xeditor::cmd_util::GetArg(m_Parser, m_hOn, On) || !ParseOn(On, bNew)) { xeditor::WriteString(File, {}); xeditor::WriteString(File, "0"); return; }
+            auto S = m_GetSlots(*m_Doc.m_pDescriptor);
+            const bool bCurrent = S.m_pSettings->*m_Setting;
+            if (bCurrent == bNew) S.m_pSettings->*m_Setting = !bNew;
+            xeditor::WriteString(File, m_Doc.Snapshot());
+            S.m_pSettings->*m_Setting = bCurrent;
+
+            const auto List = Changes(bNew);
+            xeditor::WriteString(File, std::to_string(List.size()));
+            for (auto& C : List) { xeditor::WriteString(File, xstrtool::To(C.m_Path)); xeditor::WriteString(File, C.m_Before); }
+        }
+
+        void Undo(xundo::undo_file& File) noexcept override
+        {
+            if (auto Text = xeditor::ReadString(File); !Text.empty()) m_Doc.Restore(Text);
+            const int Count = std::atoi(xeditor::ReadString(File).c_str());
+            for (int i = 0; i < Count; ++i)
+            {
+                const auto Path = std::filesystem::path(xstrtool::To(xeditor::ReadString(File)));
+                const auto Text = xeditor::ReadString(File);
+                std::ofstream Out(Path, std::ios::binary | std::ios::trunc);
+                Out.write(Text.data(), static_cast<std::streamsize>(Text.size()));
+            }
+        }
+
+        xcmdline::parser::handle m_hOn;
+    };
+
+    //--------------------------------------------------------------------------------------------
     // What a geometry editor holds: the commands, and the drawing of a slot row's override arrow and context menu
     //--------------------------------------------------------------------------------------------
     struct session_part
@@ -287,11 +411,14 @@ namespace xmaterial_instance::import::editor
         duplicate_cmd                   m_Duplicate;
         xeditor::virtual_resources::remove_unused_cmd   m_RemoveUnused;
         apply_compressions_cmd                          m_ApplyCompressions;
+        set_normal_option_cmd                           m_SetFlipNormal;
+        set_normal_option_cmd                           m_SetNormalize;
         bool                                            m_bAskApply = false;
         xeditor::virtual_resources::unused_button       m_UnusedButton;
 
         session_part(xundo::system& Undo, xeditor::descriptor_document& Doc, get_slots_fn GetSlots) noexcept
-            : m_Doc(Doc), m_Undo(Undo), m_GetSlots(GetSlots), m_SetImport(Undo, Doc, GetSlots), m_Duplicate(Undo, Doc, GetSlots), m_RemoveUnused(Undo, Doc), m_ApplyCompressions(Undo, Doc, GetSlots) {}
+            : m_Doc(Doc), m_Undo(Undo), m_GetSlots(GetSlots), m_SetImport(Undo, Doc, GetSlots), m_Duplicate(Undo, Doc, GetSlots), m_RemoveUnused(Undo, Doc), m_ApplyCompressions(Undo, Doc, GetSlots), m_SetFlipNormal(Undo, Doc, GetSlots, "SetFlipNormalY", "Flips the Y of the normal maps the import makes, or stops (undoable): the setting, and the normal maps already made, which are compiled again (nothing else is). Usage: SetFlipNormalY -On true|false", &settings::m_bFlipNormalY, &xtexture_rsc::descriptor::m_bNormalMapFlipY)
+            , m_SetNormalize(Undo, Doc, GetSlots, "SetNormalizeNormals", "Normalizes the normal maps the import makes, or stops (undoable): the setting, and the normal maps already made, which are compiled again (nothing else is). Usage: SetNormalizeNormals -On true|false", &settings::m_bNormalizeNormals, &xtexture_rsc::descriptor::m_bNormalizeNormals) {}
 
         // Above the Description inspector: the button that removes what the import made and the model no longer needs
         void DrawUnusedButton() noexcept
@@ -313,11 +440,15 @@ namespace xmaterial_instance::import::editor
             }
         }
 
-        // The checkbox is one command, not a property edit: the slots follow it
+        // The checkboxes are one command each, not a property edit: the slots follow the import, the generated normal maps follow the flip
         bool OnCustomChange(const xproperty::ui::undo::cmd& Cmd) noexcept
         {
-            if (!Cmd.m_Name.ends_with("/bImport") || !Cmd.m_NewValue.is<bool>()) return false;
-            xeditor::Run(m_Undo, std::format("SetImportMaterials -On {}", Cmd.m_NewValue.get<bool>() ? "true" : "false"));
+            if (!Cmd.m_NewValue.is<bool>()) return false;
+            const char* pCommand = Cmd.m_Name.ends_with("/bImport")            ? "SetImportMaterials"
+                                 : Cmd.m_Name.ends_with("/Flip Y for normals") ? "SetFlipNormalY"
+                                 : Cmd.m_Name.ends_with("/Normalize normals")  ? "SetNormalizeNormals" : nullptr;
+            if (!pCommand) return false;
+            xeditor::Run(m_Undo, std::format("{} -On {}", pCommand, Cmd.m_NewValue.get<bool>() ? "true" : "false"));
             return true;
         }
 
