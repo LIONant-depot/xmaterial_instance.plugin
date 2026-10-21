@@ -841,6 +841,7 @@ namespace xmaterial_instance::import
                 else if (Slot == "SamplerNormal") Instance.m_lTextures[i] = NormalRef;
                 else if (Slot == "SamplerORME")   Instance.m_lTextures[i] = ORME;
             }
+            Instance.FoldLegacy();                                       // the slots the import set are overrides of the material's textures (v2)
 
             const auto Folder = DescriptorFolder("MaterialInstance", InstanceGuid.m_Instance.m_Value);
             std::error_code Ec;
@@ -852,16 +853,17 @@ namespace xmaterial_instance::import
                 // Likewise a slot that holds only constants (the flat normal, the constant ORME, the color of a model without a color map) takes the map
                 // that the model, or the files next to its color map, give now: the constants were what the import made for want of a map.
                 const xrsc::texture_ref Placeholder{ .m_Instance = xresource::instance_guid::GenerateGUIDCopy(std::format("{}_texture_missing_texture", GuidHex(m_Owner.m_Instance.m_Value)).c_str()) };
-                for (std::size_t j = 0; j < Existing.m_lTextureDefaults.size() && j < Existing.m_lTextures.size(); ++j)
+                for (auto& E : Existing.m_Overrides)
                 {
-                    const bool bPlaceholder = Existing.m_lTextures[j] == Placeholder || IsGoneTexture(Existing.m_lTextures[j]);      // a texture that is gone is a missing one
-                    if (!bPlaceholder && !IsConstantTexture(Existing.m_lTextures[j])) continue;
-                    for (std::size_t i = 0; i < Fresh.m_lTextureDefaults.size() && i < Fresh.m_lTextures.size(); ++i)
+                    if (E.m_Type != xmaterial::param_type::TEXTURE) continue;
+                    const bool bPlaceholder = E.m_Texture == Placeholder || IsGoneTexture(E.m_Texture);      // a texture that is gone is a missing one
+                    if (!bPlaceholder && !IsConstantTexture(E.m_Texture)) continue;
+                    for (const auto& F : Fresh.m_Overrides)
                     {
-                        if (Fresh.m_lTextureDefaults[i].m_Name != Existing.m_lTextureDefaults[j].m_Name || Fresh.m_lTextures[i] == Placeholder || Fresh.m_lTextures[i] == Existing.m_lTextures[j]) continue;
-                        if (!bPlaceholder && IsConstantTexture(Fresh.m_lTextures[i])) continue;       // constants for constants: the user's stay
-                        Existing.m_lTextures[j] = Fresh.m_lTextures[i];
-                        if (m_Info) m_Info(std::format("Import Materials: material {}: its {} {} is found, the slot takes it", M.m_Name, bPlaceholder ? "missing" : "constant", Fresh.m_lTextureDefaults[i].m_Name));
+                        if (F.m_ID != E.m_ID || F.m_Type != xmaterial::param_type::TEXTURE || F.m_Texture == Placeholder || F.m_Texture == E.m_Texture) continue;
+                        if (!bPlaceholder && IsConstantTexture(F.m_Texture)) continue;       // constants for constants: the user's stay
+                        E.m_Texture = F.m_Texture;
+                        if (m_Info) m_Info(std::format("Import Materials: material {}: its {} {} is found, the slot takes it", M.m_Name, bPlaceholder ? "missing" : "constant", F.m_NameHint));
                     }
                 }
             }))

@@ -9,7 +9,10 @@ namespace xmaterial_instance
 {
     struct data_file
     {
-        inline static constexpr auto xserializer_version_v = 1;
+        // v2: the instance is fully resolved (documentation/material_contract.md section 5): its parameter block in the material's layout + the layout hash the renderer
+        //     checks against the material's. A v1 file (older size and version) is refused by the serializer and loads as null, like an uncompiled resource; the pipeline
+        //     recompiles it because the compiler executable is newer.
+        inline static constexpr auto xserializer_version_v = 2;
 
         //-------------------------------------------------------------------------
 
@@ -28,6 +31,9 @@ namespace xmaterial_instance
         xrsc::material_ref  m_MaterialRef;
         texture*            m_pTextureList;
         std::uint8_t        m_nTexturesList;
+        std::uint16_t       m_BlockBytes;               // the resolved parameter block, a multiple of 16 (0: the material reads no parameters)
+        float*              m_pParams;                  // m_BlockBytes/4 floats in the material's layout
+        std::uint64_t       m_LayoutHash;               // the manifest's: must equal the material's (xmaterial::data_file::m_LayoutHash)
     };
 
     //-------------------------------------------------------------------------
@@ -52,6 +58,9 @@ namespace xserializer::io_functions
         || (Err = Stream.Serialize(MaterialI.m_MaterialRef.m_Instance.m_Value))
         || (Err = Stream.Serialize(MaterialI.m_pTextureList, MaterialI.m_nTexturesList))
         || (Err = Stream.Serialize(MaterialI.m_nTexturesList))
+        || (Err = Stream.Serialize(MaterialI.m_pParams, MaterialI.m_BlockBytes / 4u))
+        || (Err = Stream.Serialize(MaterialI.m_BlockBytes))
+        || (Err = Stream.Serialize(MaterialI.m_LayoutHash))
         ;
 
         return Err;

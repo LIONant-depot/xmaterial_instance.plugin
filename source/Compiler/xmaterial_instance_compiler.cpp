@@ -12,7 +12,7 @@ namespace xmaterial_instance_compiler
         xerr onCompile(void) override
         {
             //
-            // Load the descriptor 
+            // Load the descriptor
             //
             auto                            DescriptorFileName  = std::format( L"{}/{}/Descriptor.txt", m_ProjectPaths.m_Project, m_InputSrcDescriptorPath);
             auto                            BaseDescriptor      = xresource_pipeline::factory_base::Find(std::string_view{ "Material Instance" })->CreateDescriptor();
@@ -36,42 +36,84 @@ namespace xmaterial_instance_compiler
                 }
             }
 
-            // Convert to something more friendly 
+            // Convert to something more friendly
             auto& Descriptor = *reinterpret_cast<xmaterial_instance::descriptor*>(BaseDescriptor.get());
 
             //
-            // Set the user textures into the final texture slots
+            // Resolve: this instance, its parents, the material (section 5 of the contract). Every ancestor's descriptor is a dependency, so editing one compiles its
+            // descendants again.
             //
+            xmaterial_instance::resolution Resolution;
+            const auto Missing  = Resolution.Run(m_ProjectPaths.m_Project, m_ProjectPaths.m_Descriptors, m_ResourceGuid.m_Value, Descriptor);
+            auto&      Resolved = Resolution.m_Resolved;
+            const auto& Layout  = Resolution.m_Layout;
+            const auto& Manifest = Layout.m_Manifest;
+
+            static constexpr const char* Codes[] = { "W_ORPHAN_ID", "W_ORPHAN_TYPE", "W_CLAMPED", "E_CHAIN_CYCLE", "E_CHAIN_DEPTH", "E_PARENT_ROOT" };
+            for (auto& D : Resolved.m_Diags)
+                LogMessage( D.m_Code >= xmaterial_instance::diag_code::E_CHAIN_CYCLE ? xresource_pipeline::msg_type::ERROR : xresource_pipeline::msg_type::WARNING
+                          , D.m_ID ? std::format("{}: parameter {:016X}", Codes[int(D.m_Code)], D.m_ID) : std::string(Codes[int(D.m_Code)]));
+
+            if (not Missing.empty())
             {
-                // Now let us search each texture in the up to date material-descriptor
-                for (auto& E : Descriptor.m_lTextureDefaults)
+                LogMessage(xresource_pipeline::msg_type::ERROR, Missing);
+                return xerr::create_f<state, "The material instance could not be resolved (see the log)">();
+            }
+            if (Resolved.Failed())
+                return xerr::create_f<state, "The material instance chain is not valid (see the log for the E_ codes)">();
+
+            for (auto& A : Resolved.m_Chain)
+                if (A != m_ResourceGuid.m_Value)
                 {
-                    const auto Index = static_cast<int>(&E - Descriptor.m_lTextureDefaults.data());
-
-                    // Set final textures
-                    Descriptor.m_lFinalTextures[E.m_Index].m_TextureRef = Descriptor.m_lTextures[Index];
+                    xrsc::material_instance_ref Ref;
+                    Ref.m_Instance.m_Value = A;
+                    m_Dependencies.m_Resources.push_back(Ref);
+                    m_Dependencies.m_Assets.push_back(Resolution.DescriptorPath(m_ProjectPaths.m_Descriptors, A).substr(m_ProjectPaths.m_Project.length() + 1));
                 }
-            }
 
             //
-            // Assign all the textures
+            // The parameter block, in the material's layout
             //
-            displayProgressBar("Compiling Assigning Textures", 0.0f);
+            displayProgressBar("Compiling Packing Parameters", 0.0f);
 
-            auto Textures = std::make_unique<xmaterial_instance::data_file::texture[]>(Descriptor.m_lFinalTextures.size());
-
-            for ( auto& E : Descriptor.m_lFinalTextures)
+            std::vector<float> Block(Manifest.m_BlockBytes / 4, 0.0f);
+            for (const auto& E : Manifest.m_Entries)
             {
-                const auto Index = static_cast<int>(&E - Descriptor.m_lFinalTextures.data());
-
-                //
-                // Assign all the required data
-                //
-                auto& T = Textures[Index];
-                T.m_TexureRef = E.m_TextureRef;
+                if (E.m_Type == xmaterial::param_type::TEXTURE) continue;
+                auto It = std::ranges::find(Resolved.m_Params, E.m_ID, &xmaterial_instance::resolved_param::m_ID);
+                if (It == Resolved.m_Params.end()) continue;
+                const float V[4] = { It->m_Value.m_X, It->m_Value.m_Y, It->m_Value.m_Z, It->m_Value.m_W };
+                const int   n    = E.m_Type == xmaterial::param_type::FLOAT ? 1 : E.m_Type == xmaterial::param_type::FLOAT2 ? 2 : E.m_Type == xmaterial::param_type::FLOAT3 ? 3 : 4;
+                for (int i = 0; i < n; ++i) Block[E.m_ByteOffset / 4 + i] = V[i];
             }
 
-            displayProgressBar("Compiling Assigning Textures", 1.0f);
+            //
+            // The textures: the material's, with the ones an instance of the chain set
+            //
+            std::vector<xrsc::texture_ref> Final;
+            for (auto& E : Layout.m_Template.m_lFinalTextures) Final.push_back(E.m_TextureRef);
+
+            for (const auto& P : Resolved.m_Params)
+            {
+                if (P.m_Type != xmaterial::param_type::TEXTURE || P.m_Source < 0) continue;
+                const int  Index = Layout.TextureIndex(P.m_ID);
+                const auto* pSet = Resolution.m_Descriptors[Resolved.m_Chain[P.m_Source]]->Find(P.m_ID);
+                if (Index >= 0 && pSet && not pSet->m_Texture.empty()) Final[Index] = pSet->m_Texture;
+            }
+
+            auto Textures = std::make_unique<xmaterial_instance::data_file::texture[]>(Final.size());
+            for (auto& E : Final) Textures[&E - Final.data()].m_TexureRef = E;
+
+            displayProgressBar("Compiling Packing Parameters", 1.0f);
+
+            {
+                std::string Text = std::format("Resolved against the layout {:016X}: block of {} bytes:", Manifest.m_LayoutHash, Manifest.m_BlockBytes);
+                for (const float F : Block) Text += std::format(" {}", F);
+                LogMessage(xresource_pipeline::msg_type::INFO, Text);
+                Text = "Textures:";
+                for (const auto& E : Final) Text += std::format(" {:016X}", E.m_Instance.m_Value);
+                LogMessage(xresource_pipeline::msg_type::INFO, Text);
+            }
 
             //
             // Construct the data_file
@@ -80,16 +122,19 @@ namespace xmaterial_instance_compiler
             xmaterial_instance::data_file DataFile;
             DataFile.m_MaterialRef   = Descriptor.m_MaterialRef;
             DataFile.m_pTextureList  = Textures.get();
-            DataFile.m_nTexturesList = static_cast<std::uint8_t>(Descriptor.m_lFinalTextures.size());
+            DataFile.m_nTexturesList = static_cast<std::uint8_t>(Final.size());
+            DataFile.m_BlockBytes    = Manifest.m_BlockBytes;
+            DataFile.m_pParams       = Block.empty() ? nullptr : Block.data();
+            DataFile.m_LayoutHash    = Manifest.m_LayoutHash;
             displayProgressBar("Compiling Constructing data file", 1.0f);
 
             //
             // Add the dependencies
             //
             m_Dependencies.m_Resources.push_back(Descriptor.m_MaterialRef);
-            for (auto& E : Descriptor.m_lFinalTextures)
+            for (auto& E : Final)
             {
-                if (not E.m_TextureRef.empty()) m_Dependencies.m_Resources.push_back(E.m_TextureRef);
+                if (not E.empty()) m_Dependencies.m_Resources.push_back(E);
             }
 
             {
@@ -97,7 +142,9 @@ namespace xmaterial_instance_compiler
                 if (auto Err = Descriptor.getTemplatePathFromDescriptorPath(MaterialRefDescriptorPath, DescriptorFileName); Err)
                     return Err;
 
-                m_Dependencies.m_Assets.push_back(MaterialRefDescriptorPath.substr(m_ProjectPaths.m_Project.length()+1));
+                auto Rel = MaterialRefDescriptorPath.substr(m_ProjectPaths.m_Project.length()+1);
+                m_Dependencies.m_Assets.push_back(Rel);
+                m_Dependencies.m_Assets.push_back(Rel.replace(Rel.rfind(L'/') + 1, std::wstring::npos, L"MaterialLayout.txt"));
             }
 
             //

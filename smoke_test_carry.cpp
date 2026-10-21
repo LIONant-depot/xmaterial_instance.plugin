@@ -1,4 +1,4 @@
-// Which textures come along when the material of an instance changes (source/xmaterial_instance_carry.h). Standalone: built and run by
+// Which overrides come along when the material of an instance changes (source/xmaterial_instance_carry.h). Standalone: built and run by
 // source/Editors/LevelEditor/smoke/test_material_instance_carry.py. Exit 0 when every check holds.
 #include "source/xmaterial_instance_carry.h"
 
@@ -15,55 +15,31 @@ namespace
         std::printf("FAIL: %s\n", pWhat);
     }
 
-    using names = std::vector<std::string>;
-    using flags = std::vector<bool>;
-    using ints  = std::vector<int>;
+    using ids = std::vector<std::uint64_t>;
+    using ps  = std::vector<xmaterial_instance::carry_param>;
 }
 
 int main()
 {
     using namespace xmaterial_instance;
 
-    // slots with the same name take the texture the person assigned, whatever their place in the new material
-    {
-        const auto M = MatchCarriedTextures(names{ "SamplerNormal", "SamplerAlbedo", "SamplerORME" }, flags{ true, true, true }, names{ "SamplerAlbedo", "SamplerORME", "SamplerNormal" });
-        Check(M == ints{ 1, 2, 0 }, "the textures follow the names, not the places");
-    }
+    // an id the new material has stays where it is, whatever its name or place
+    Check(MatchCarriedOverrides(ps{ { 1, "A", 0 }, { 2, "B", 4 } }, ps{ { 2, "Renamed", 4 }, { 1, "A", 0 } }) == ids{ 1, 2 }, "the ids decide, not the names or the places");
 
-    // what the person did not assign is the material's own: the new material's default is used
-    {
-        const auto M = MatchCarriedTextures(names{ "SamplerNormal", "SamplerAlbedo" }, flags{ false, true }, names{ "SamplerNormal", "SamplerAlbedo" });
-        Check(M == ints{ -1, 1 }, "a slot that is the old material's default is not carried");
-    }
+    // an id it does not have goes to the parameter of the same name and type
+    Check(MatchCarriedOverrides(ps{ { 7, "Tint", 4 }, { 8, "Albedo", 5 } }, ps{ { 70, "Albedo", 5 }, { 71, "Tint", 4 } }) == ids{ 71, 70 }, "the same name and type under another id carries");
+    Check(MatchCarriedOverrides(ps{ { 7, "Tint", 4 } }, ps{ { 70, "Tint", 3 } }) == ids{ 0 }, "the same name with another type is not the same parameter");
+    Check(MatchCarriedOverrides(ps{ { 7, "Tint", 4 } }, ps{ { 70, "tint", 4 } }) == ids{ 0 }, "names are exact");
+    Check(MatchCarriedOverrides(ps{ { 7, "", 4 } }, ps{ { 70, "", 4 } }) == ids{ 0 }, "an override with no name hint never matches by name");
 
-    // a slot the new material does not have is dropped; a slot the old one did not have starts from the default
-    {
-        const auto M = MatchCarriedTextures(names{ "SamplerAlbedo", "SamplerEmission" }, flags{ true, true }, names{ "SamplerAlbedo", "SamplerHeight" });
-        Check(M == ints{ 0, -1 }, "a name only in the old material goes nowhere, a name only in the new one gets nothing");
-    }
-
-    // names are exact
-    {
-        const auto M = MatchCarriedTextures(names{ "SamplerAlbedo" }, flags{ true }, names{ "sampleralbedo", "SamplerAlbedo2", "SamplerAlbedo" });
-        Check(M == ints{ -1, -1, 0 }, "only an identical name matches");
-    }
-
-    // a slot is taken from once: two new slots of one name take two old slots of that name, in order; one old slot is not copied twice
-    {
-        const auto Two = MatchCarriedTextures(names{ "Map", "Map" }, flags{ true, true }, names{ "Map", "Map" });
-        Check(Two == ints{ 0, 1 }, "two slots of one name take two old ones, in order");
-        const auto One = MatchCarriedTextures(names{ "Map" }, flags{ true }, names{ "Map", "Map" });
-        Check(One == ints{ 0, -1 }, "an old slot is carried once");
-    }
+    // an id match wins over a name match, and a parameter is taken once
+    Check(MatchCarriedOverrides(ps{ { 1, "X", 0 } }, ps{ { 1, "Y", 0 }, { 2, "X", 0 } }) == ids{ 1 }, "the id match is served before the name match");
+    Check(MatchCarriedOverrides(ps{ { 7, "Map", 5 }, { 8, "Map", 5 } }, ps{ { 70, "Map", 5 } }) == ids{ 70, 0 }, "a parameter is carried to once, the other is an orphan");
+    Check(MatchCarriedOverrides(ps{ { 7, "Map", 5 }, { 70, "Other", 5 } }, ps{ { 70, "Map", 5 } }) == ids{ 0, 70 }, "a parameter an id match took is not given to a name");
 
     // nothing to carry
-    {
-        Check(MatchCarriedTextures({}, {}, names{ "A", "B" }) == ints{ -1, -1 }, "an instance with no material before carries nothing");
-        Check(MatchCarriedTextures(names{ "A" }, flags{ true }, {}).empty(), "a material with no textures has nothing to fill");
-        Check(MatchCarriedTextures(names{ "A", "B" }, flags{ true, true }, names{ "A", "B" }) == ints{ 0, 1 } , "the same material again keeps every assigned texture");
-        // (a flags list shorter than the names, which a broken descriptor can give, must not read past its end)
-        Check(MatchCarriedTextures(names{ "A", "B" }, flags{ true }, names{ "B" }) == ints{ -1 }, "a short flags list is not read past its end");
-    }
+    Check(MatchCarriedOverrides({}, ps{ { 1, "A", 0 } }).empty(), "no overrides, nothing to carry");
+    Check(MatchCarriedOverrides(ps{ { 1, "A", 0 } }, {}) == ids{ 0 }, "a material with no parameters keeps everything as orphans");
 
     if (g_Failed == 0) std::printf("all checks passed\n");
     return g_Failed == 0 ? 0 : 1;
