@@ -17,6 +17,13 @@
 
 namespace xmaterial_instance_editor
 {
+    // The block a preview draws an instance with: its resolved one; a stale one (another layout than the material's) must not be read, so the material's default stands in
+    inline std::span<const float> PreviewBlock(const auto& Instance, const auto& Material) noexcept
+    {
+        if (Instance.m_LayoutHash != Material.m_LayoutHash) return { Material.m_pDefaultBlock, std::size_t(Material.m_BlockBytes) / 4 };
+        return { Instance.m_pParams, std::size_t(Instance.m_BlockBytes) / 4 };
+    }
+
     class thumbnail_renderer final : public xeditor::thumbnail_renderer
     {
     public:
@@ -66,7 +73,7 @@ namespace xmaterial_instance_editor
                 if (auto* pTexture = xresource::g_Mgr.getResource(Entry.m_TexureRef)) Bindings.emplace_back(*pTexture);
                 else                                                                   Bindings.emplace_back(m_Preview.DefaultTexture());
             }
-            if (!m_Preview.SetMaterial(pMaterial->getShader(), Bindings)) return false;
+            if (!m_Preview.SetMaterial(pMaterial->getShader(), Bindings, PreviewBlock(*pInstance, *pMaterial))) return false;
 
             {
                 auto CmdBuffer = Window.StartRenderPass(m_Pass);         // its destructor ends the pass, before the readback

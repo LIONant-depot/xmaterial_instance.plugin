@@ -551,7 +551,7 @@ namespace xmaterial_instance_editor
                 if (auto* pTexture = xresource::g_Mgr.getResource(Entry.m_TexureRef)) Bindings.emplace_back(*pTexture);
                 else                                                                   Bindings.emplace_back(m_Preview.DefaultTexture());
             }
-            m_Preview.SetMaterial(pMaterial->getShader(), Bindings);
+            m_Preview.SetMaterial(pMaterial->getShader(), Bindings, PreviewBlock(*pInstance, *pMaterial));
         }
     };
 
