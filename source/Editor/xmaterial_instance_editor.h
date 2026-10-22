@@ -2,8 +2,8 @@
 #define XMATERIAL_INSTANCE_EDITOR_H
 #pragma once
 
-// The Material Instance editor: opens a material instance from the asset browser in its own window. What the instance says (which material, which parent, which
-// parameters it sets) is edited in an inspector, a parameters panel and through commands, all undoable; the compiled instance is previewed on a mesh. Hosts include this
+// The Material Instance editor: opens a material instance from the asset browser in its own window. What the instance says (its base: a material or another instance,
+// which parameters it sets, Double Sided) is edited in one inspector, the material's parameters as its properties, and through commands, all undoable; the compiled instance is previewed on a mesh. Hosts include this
 // header and open editors through xeditor::open_resource_editors.
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
 #include "source/Tools/Editor/xeditor_mesh_preview.h"
@@ -410,128 +410,228 @@ namespace xmaterial_instance_editor
         xeditor::mesh_preview_cmds      m_PreviewCmds;
         xrsc::material_instance_ref     m_InstanceRef;
 
-        std::unique_ptr<xmaterial_instance::resolution> m_Resolution;       // what the parameters panel shows, read again every second and when the descriptor is replaced
+        std::unique_ptr<xmaterial_instance::resolution> m_Resolution;       // what the parameters show, read again every second and when the descriptor is replaced
         double                                          m_ResolutionAt  = 0;
         std::string                                     m_ResolutionErr;
-        xmaterial::param_id                             m_EditID        = 0;        // the parameter whose widget is being dragged: the value shown is the edit's until it is let go
-        float                                           m_Edit[4]       = {};
+        std::vector<row::source>                        m_Sources;          // where each shown parameter's value comes from (the inspector's override marks), by row
+        row::source                                     m_DoubleSidedSource = row::source::DEFAULT, m_AlphaCutoffSource = row::source::DEFAULT;   // the Render Settings' rows
+        std::vector<xmaterial_instance::param_row>      m_Shown;            // the rows as they were filled: what an edit of several values at once (a colour pick) changed
+        std::size_t                                     m_nOrphans      = 0;
+        xrsc::material_ref                              m_LiveMaterial;     // the live preview: what it was last made from (the material, its textures, the block)
+        std::vector<xrsc::texture_ref>                  m_LiveTextures;
+        std::vector<float>                              m_LiveBlock;
+        std::string                                     m_LiveKey;
 
         session(xresource::full_guid Guid, xresource_editor::library::guid LibraryGuid, xgpu::device* pDevice) noexcept
             : descriptor_editor("Material Instance", Guid, LibraryGuid, pDevice), m_SetMaterial(m_Undo, m_Document), m_SetParent(m_Undo, m_Document), m_SetOverride(m_Undo, m_Document)
             , m_ClearOverride(m_Undo, m_Document), m_ListOverrides(m_Undo, m_Document), m_PreviewCmds(m_Undo, m_Preview)
         {
-            xresource_editor::WireResourcePickerCallbacks(m_DescriptorInspector.m_Inspector);
+            auto& Inspector = m_DescriptorInspector.m_Inspector;
+            xresource_editor::WireResourcePickerCallbacks(Inspector);
+            Inspector.m_OnOverrideCheck.Register<&session::OnOverrideCheck>(*this);      // a parameter set here is marked (">" goes back to inheriting it)
+            Inspector.m_OnOverrideReset.Register<&session::OnOverrideReset>(*this);
 
-            AddPanel("Material Instance Preview", dock::center, [this] { m_Preview.Render(); });
-            AddPanel("Description",               dock::right,  [this] { m_DescriptorInspector.Show(); });
-            AddPanel("Parameters",                dock::right,  [this] { ShowParameters(); });
+            AddPanel("Material Instance Preview", dock::center, [this] { UpdateLivePreview(); m_Preview.Render(); });
+            AddPanel("Description",               dock::right,  [this] { ShowDescription(); });
 
             if (pDevice && m_Preview.Init(*pDevice)) ReloadPreview();
         }
 
-        ~session() noexcept override { xresource::g_Mgr.ReleaseRef(m_InstanceRef); }
+        ~session() noexcept override { xresource::g_Mgr.ReleaseRef(m_InstanceRef); ReleaseLive(); }
 
-        void OnCompiled() noexcept override { m_Resolution.reset(); ReloadPreview(); }
-        void OnDescriptorReplaced() noexcept override { m_Resolution.reset(); m_EditID = 0; }
-
-        // Picking the material or the parent is one command, not a property edit: what was set has to follow.
-        bool OnCustomChange(const xproperty::ui::undo::cmd& Cmd) noexcept override
+        void ReleaseLive() noexcept
         {
-            const bool bMaterial = Cmd.m_Name.ends_with("/MaterialRef"), bParent = Cmd.m_Name.ends_with("/ParentRef");
-            if ((!bMaterial && !bParent) || !Cmd.m_NewValue.is<xresource::full_guid>()) return false;
-            const auto Before = Cmd.m_Original.is<xresource::full_guid>() ? Cmd.m_Original.get<xresource::full_guid>().m_Instance.m_Value : 0;
-            xeditor::Run(m_Undo, std::format("{} -{} {:016X} -Before {:016X}", bMaterial ? "SetMaterial" : "SetParent", bMaterial ? "Material" : "Instance", Cmd.m_NewValue.get<xresource::full_guid>().m_Instance.m_Value, Before));
-            m_Resolution.reset();
-            return true;
+            xresource::g_Mgr.ReleaseRef(m_LiveMaterial);
+            for (auto& T : m_LiveTextures) xresource::g_Mgr.ReleaseRef(T);
+            m_LiveTextures.clear();
         }
 
-        // The parameters of the material: each with where its value comes from (dim: the material's default or a parent's; marked: set here, the button goes back to
-        // inheriting it) and an editor for its value. A color is shown as sRGB and stored linear. Every edit is a SetOverride when it is let go.
-        void ShowParameters() noexcept
+        // The preview is live: it draws what the rows say now (the values and textures as edited, a parent's and the defaults as resolved), packed in the material's
+        // layout, without a compile. Made again only when something it shows changed. Until the rows are there (no layout yet), the compiled instance (ReloadPreview).
+        void UpdateLivePreview() noexcept
         {
-            if (!m_Document.isLoaded()) return;
-            auto&      D    = Desc(m_Document);
-            const auto Self = m_Document.m_Guid.m_Instance.m_Value;
-            const auto Now  = ImGui::GetTime();
-            if (!m_Resolution || Now - m_ResolutionAt > 1.0)
+            if (!m_Document.isLoaded() || !m_Resolution || !m_ResolutionErr.empty() || m_Resolution->m_Resolved.Failed()) return;
+            const auto& D      = Desc(m_Document);
+            const auto& Layout = m_Resolution->m_Layout;
+            const auto& M      = Layout.m_Manifest;
+
+            // The value of a parameter as the rows have it
+            const auto Find = [&](xmaterial::param_id ID) -> const xmaterial_instance::param_row*
             {
-                m_Resolution = std::make_unique<xmaterial_instance::resolution>();
-                m_ResolutionErr = m_Resolution->Run(Project(), DescriptorsRoot(m_Document), Self, D);
-                m_ResolutionAt  = Now;
+                for (const auto& R : D.m_Params) if (R.m_ID == ID) return &R;
+                if (D.m_AlphaCutoffRow.m_ID == ID) return &D.m_AlphaCutoffRow;
+                return nullptr;
+            };
+
+            std::vector<float>             Block(M.m_BlockBytes / 4, 0.0f);
+            std::vector<xrsc::texture_ref> Textures;
+            for (const auto& E : Layout.m_Template.m_lFinalTextures) Textures.push_back(E.m_TextureRef);
+            for (const auto& E : M.m_Entries)
+            {
+                const auto* pRow = Find(E.m_ID);
+                if (!pRow) continue;
+                if (E.m_Type == param_type::TEXTURE)
+                {
+                    if (const int i = Layout.TextureIndex(E.m_ID); i >= 0 && !pRow->m_Texture.empty()) Textures[i] = pRow->m_Texture;
+                    continue;
+                }
+                const float V[4] = { pRow->m_V.m_X, pRow->m_V.m_Y, pRow->m_V.m_Z, pRow->m_V.m_W };
+                for (int i = 0; i < Components(E.m_Type) && E.m_ByteOffset / 4 + i < Block.size(); ++i) Block[E.m_ByteOffset / 4 + i] = V[i];
             }
-            if (!m_ResolutionErr.empty()) { ImGui::TextWrapped("%s", m_ResolutionErr.c_str()); return; }
-            if (m_Resolution->m_Resolved.Failed()) { ImGui::TextWrapped("The chain of parents is not valid (a cycle, more than 8 deep, or a parent of another material)."); return; }
 
-            std::string Pending;
-            const auto Edit = [&](const std::string& Command) { Pending = Command; };        // run after the rows: they point into the resolution an edit drops
-            const auto ToSRGB   = [](float x) { return x <= 0.0031308f ? 12.92f * x : 1.055f * std::pow(x, 1.0f / 2.4f) - 0.055f; };
-            const auto ToLinear = [](float x) { return x <= 0.04045f ? x / 12.92f : std::pow((x + 0.055f) / 1.055f, 2.4f); };
+            std::string Key = std::format("{:016X}", D.m_MaterialRef.m_Instance.m_Value);
+            for (const auto& T : Textures) Key += std::format(" {:016X}", T.m_Instance.m_Value);
+            Key.append(reinterpret_cast<const char*>(Block.data()), Block.size() * sizeof(float));
+            if (Key == m_LiveKey && m_Preview.hasMaterial()) return;
 
-            const auto Rows_ = Rows(*m_Resolution, D);
+            xrsc::material_ref Material; Material.m_Instance = D.m_MaterialRef.m_Instance;
+            auto* pMaterial = xresource::g_Mgr.getResource(Material);
+            if (!pMaterial) return;                                             // not loaded yet: tried again on the next frame
+            ReleaseLive();
+            m_LiveMaterial = Material;
+            m_LiveTextures = Textures;
+            m_LiveBlock    = std::move(Block);
+            m_LiveKey      = std::move(Key);
+
+            std::vector<xgpu::pipeline_instance::sampler_binding> Bindings;
+            for (auto& T : m_LiveTextures)
+            {
+                if (auto* pTexture = T.empty() ? nullptr : xresource::g_Mgr.getResource(T)) Bindings.emplace_back(*pTexture);
+                else                                                                        Bindings.emplace_back(m_Preview.DefaultTexture());
+            }
+            // ponytail: a new pipeline per change (SetMaterial makes all of it again), a params-only update if dragging ever stutters
+            m_Preview.SetMaterial(pMaterial->getShader(), Bindings, m_LiveBlock);
+        }
+
+        void OnCompiled() noexcept override { m_Resolution.reset(); m_LiveKey.clear(); ReloadPreview(); }
+        void OnDescriptorReplaced() noexcept override { m_Resolution.reset(); }
+
+        // "material_instance_descriptor/Parameters[G:3]/Value/R" -> 3; -1 for a path that is not a parameter's
+        static int ParamIndex(std::string_view Path) noexcept
+        {
+            const auto At = Path.find("/Parameters[G:");
+            if (At == std::string_view::npos) return -1;
+            int Index = -1;
+            const auto b = At + std::strlen("/Parameters[G:");
+            std::from_chars(Path.data() + b, Path.data() + Path.size(), Index);
+            return Index;
+        }
+
+        // The row a path is in (a parameter's, or a render setting's) and where its value comes from; null for a path that is none
+        const xmaterial_instance::param_row* RowAt(std::string_view Path, row::source* pSource = nullptr) noexcept
+        {
+            if (!m_Document.isLoaded()) return nullptr;
+            auto& D = Desc(m_Document);
+            if (Path.find("/Render Settings/Double Sided") != std::string_view::npos) { if (pSource) *pSource = m_DoubleSidedSource; return D.m_DoubleSidedRow.m_ID ? &D.m_DoubleSidedRow : nullptr; }
+            if (Path.find("/Render Settings/Alpha Cutoff") != std::string_view::npos) { if (pSource) *pSource = m_AlphaCutoffSource; return D.m_AlphaCutoffRow.m_ID ? &D.m_AlphaCutoffRow : nullptr; }
+            const int i = ParamIndex(Path);
+            if (i < 0 || i >= static_cast<int>(D.m_Params.size())) return nullptr;
+            if (pSource && i < static_cast<int>(m_Sources.size())) *pSource = m_Sources[i];
+            return &D.m_Params[i];
+        }
+
+        void OnOverrideCheck(xproperty::inspector&, const xproperty::type::object&, void*, std::string_view Path, const xproperty::any&, bool& bOverridden) noexcept
+        {
+            row::source Source = row::source::DEFAULT;
+            if (RowAt(Path, &Source)) bOverridden = Source == row::source::HERE;
+        }
+
+        void OnOverrideReset(xproperty::inspector&, const xproperty::type::object&, void*, std::string_view Path) noexcept
+        {
+            if (const auto* pRow = RowAt(Path)) { xeditor::Run(m_Undo, std::format("ClearOverride -Id {:016X}", pRow->m_ID)); m_Resolution.reset(); }
+        }
+
+        // A row's value as SetOverride takes it; empty for a texture taken out (the default again)
+        static std::string OverrideValue(const xmaterial_instance::param_row& R) noexcept
+        {
+            if (R.m_Type == param_type::TEXTURE && R.m_Texture.empty()) return {};
+            return FormatValue(R.m_Type, R.m_V, R.m_Texture);
+        }
+
+        void SetFromRow(const xmaterial_instance::param_row& R) noexcept
+        {
+            if (const auto Value = OverrideValue(R); Value.empty()) xeditor::Run(m_Undo, std::format("ClearOverride -Id {:016X}", R.m_ID));
+            else                                                    xeditor::Run(m_Undo, std::format("SetOverride -Id {:016X} -Value {}", R.m_ID, xeditor::Quote(Value)));
+        }
+
+        // Picking the base (a material or an instance) is one command, not a property edit: what was set has to follow. So is a parameter's edit: a SetOverride with
+        // the row's whole value (one channel of a colour was edited: the others come along). An edit of several values at once (a colour pick: a snapshot of the
+        // descriptor) sets each row it changed.
+        bool OnCustomChange(const xproperty::ui::undo::cmd& Cmd) noexcept override
+        {
+            if (Cmd.m_Name.ends_with("/Base") && Cmd.m_NewValue.is<xresource::full_guid>())
+            {
+                const auto New = Cmd.m_NewValue.get<xresource::full_guid>();
+                if (New.m_Type == xrsc::material_instance_type_guid_v || New.empty()) xeditor::Run(m_Undo, std::format("SetParent -Instance {:016X}", New.m_Instance.m_Value));
+                else                                                                   xeditor::Run(m_Undo, std::format("SetMaterial -Material {:016X}", New.m_Instance.m_Value));
+                m_Resolution.reset();
+                return true;
+            }
+            if (!m_Document.isLoaded()) return false;
+
+            if (const auto* pRow = RowAt(Cmd.m_Name))
+            {
+                // The edit into the row first (the inspector reports it, the view may not hold it yet), then the row's whole value as the override
+                std::string                  Error;
+                xproperty::settings::context Context;
+                xproperty::sprop::setProperty(Error, m_Document.m_pDescriptor.get(), *m_Document.m_pDescriptor->getProperties(), xproperty::sprop::container::prop{ Cmd.m_Name, Cmd.m_NewValue }, Context);
+                SetFromRow(*pRow);
+                m_Resolution.reset();
+                return true;
+            }
+
+            if (Cmd.m_NewValue.is<std::string>() && Cmd.m_Name.find('/') == std::string::npos)
+            {
+                const auto& Rows = Desc(m_Document).m_Params;
+                bool bAny = false;
+                for (std::size_t i = 0; i < Rows.size() && i < m_Shown.size(); ++i)
+                    if (OverrideValue(Rows[i]) != OverrideValue(m_Shown[i])) { SetFromRow(Rows[i]); bAny = true; }
+                if (bAny) { m_Resolution.reset(); return true; }
+            }
+            return false;
+        }
+
+        // The descriptor, with the material's parameters as its properties: the view is filled from the resolved instance before it is drawn (not while a widget is
+        // being edited: the view holds that edit until it is let go). The chain's errors and the orphans (values for parameters the material no longer has) under it.
+        void ShowDescription() noexcept
+        {
+            if (m_Document.isLoaded() && !ImGui::IsAnyItemActive() && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) RefreshParams();
+            m_DescriptorInspector.Show();
+            if (!m_ResolutionErr.empty())                              ImGui::TextWrapped("%s", m_ResolutionErr.c_str());
+            else if (m_Resolution && m_Resolution->m_Resolved.Failed()) ImGui::TextWrapped("The chain of bases is not valid (a cycle, more than 8 deep, or a base of another material).");
+            if (m_nOrphans) ImGui::TextDisabled("%zu value(s) set for parameters the material no longer has: kept, not applied (ListOverrides, ClearOverride)", m_nOrphans);
+        }
+
+        // The rows, in the material's order: its parameters' Order (SetParamInfo -Order), ties as declared
+        void RefreshParams() noexcept
+        {
+            auto&      D   = Desc(m_Document);
+            const auto Now = ImGui::GetTime();
+            if (m_Resolution && Now - m_ResolutionAt <= 1.0) return;
+            m_Resolution    = std::make_unique<xmaterial_instance::resolution>();
+            m_ResolutionErr = m_Resolution->Run(Project(), DescriptorsRoot(m_Document), m_Document.m_Guid.m_Instance.m_Value, D);
+            m_ResolutionAt  = Now;
+
+            D.m_Params.clear();
+            D.m_DoubleSidedRow = {};
+            D.m_AlphaCutoffRow = {};
+            m_Sources.clear();
+            m_nOrphans = 0;
+            if (!m_ResolutionErr.empty() || m_Resolution->m_Resolved.Failed()) { m_Shown.clear(); return; }
+
+            const auto& Decls = m_Resolution->m_Layout.m_Manifest.m_Decls;
+            auto Rows_ = Rows(*m_Resolution, D);
+            std::ranges::stable_sort(Rows_, {}, [&](const row& R) { return R.m_pDecl ? std::pair{ R.m_pDecl->m_Order, R.m_pDecl - Decls.data() } : std::pair{ INT32_MAX, std::ptrdiff_t(Decls.size()) }; });
             for (const auto& R : Rows_)
             {
-                ImGui::PushID(static_cast<int>(R.m_ID ^ (R.m_ID >> 32)));
-                const bool bOrphan = R.m_Source == row::source::ORPHAN_ID || R.m_Source == row::source::ORPHAN_TYPE;
-                const bool bHere   = R.m_Source == row::source::HERE;
-
-                // The button that goes back to inheriting (or drops an orphan); a row that sets nothing keeps the room
-                if (bHere || bOrphan)
-                {
-                    if (ImGui::SmallButton(bOrphan ? "x" : ">")) Edit(std::format("ClearOverride -Id {:016X}", R.m_ID));
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", bOrphan ? "Remove this value: nothing reads it" : "Inherit it again");
-                }
-                else ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
-                ImGui::SameLine();
-
-                ImGui::PushStyleColor(ImGuiCol_Text, bHere ? IM_COL32(170, 170, 255, 255) : bOrphan ? IM_COL32(200, 120, 120, 255) : ImGui::GetColorU32(ImGuiCol_TextDisabled));
-                ImGui::TextUnformatted(R.m_Name.empty() ? std::format("{:016X}", R.m_ID).c_str() : R.m_Name.c_str());
-                ImGui::PopStyleColor();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%016llX: %s", static_cast<unsigned long long>(R.m_ID), R.Where().c_str());
-                ImGui::SameLine(150.0f);
-
-                if (R.m_Type == param_type::TEXTURE)
-                {
-                    const xresource::full_guid Current{ xresource::instance_guid{ R.m_Texture.m_Instance.m_Value }, xrsc::texture_type_guid_v };
-                    bool bOpen = false, bClear = false;
-                    xresource_editor::RenderResourceReferenceRow(&R, Current, true, {}, bOpen, bClear);
-                    xresource::full_guid Picked = Current;
-                    const xresource::type_guid Filter = xrsc::texture_type_guid_v;
-                    xresource_editor::ResourceBrowserPopup(&R, bOpen, Picked, std::span<const xresource::type_guid>(&Filter, 1));
-                    if (!bOrphan && Picked.m_Instance.m_Value != Current.m_Instance.m_Value && !Picked.empty()) Edit(std::format("SetOverride -Id {:016X} -Value {:016X}", R.m_ID, Picked.m_Instance.m_Value));
-                    if (bClear && bHere) Edit(std::format("ClearOverride -Id {:016X}", R.m_ID));
-                }
-                else if (bOrphan) ImGui::TextDisabled("%s  (%s)", FormatValue(R.m_Type, R.m_Value, R.m_Texture).c_str(), R.Where().c_str());
-                else
-                {
-                    float V[4] = { R.m_Value.m_X, R.m_Value.m_Y, R.m_Value.m_Z, R.m_Value.m_W };
-                    if (m_EditID == R.m_ID) std::copy(m_Edit, m_Edit + 4, V);
-                    const auto& Decl = *R.m_pDecl;
-                    bool bChanged = false;
-                    ImGui::SetNextItemWidth(-FLT_MIN);
-                    switch (R.m_Type)
-                    {
-                    case param_type::FLOAT:  bChanged = Decl.m_UiMax.m_X > Decl.m_UiMin.m_X ? ImGui::SliderFloat("##v", V, Decl.m_UiMin.m_X, Decl.m_UiMax.m_X) : ImGui::DragFloat("##v", V, 0.01f); break;
-                    case param_type::FLOAT2: bChanged = ImGui::DragFloat2("##v", V, 0.01f); break;
-                    case param_type::FLOAT3: bChanged = ImGui::DragFloat3("##v", V, 0.01f); break;
-                    case param_type::FLOAT4: bChanged = ImGui::DragFloat4("##v", V, 0.01f); break;
-                    default:
-                    {
-                        float S[4] = { ToSRGB(V[0]), ToSRGB(V[1]), ToSRGB(V[2]), V[3] };
-                        const ImGuiColorEditFlags Flags = (Decl.m_bHDR ? ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float : ImGuiColorEditFlags_Float) | (Decl.m_bAlpha ? 0 : ImGuiColorEditFlags_NoAlpha);
-                        bChanged = ImGui::ColorEdit4("##v", S, Flags);
-                        if (bChanged) { V[0] = ToLinear(S[0]); V[1] = ToLinear(S[1]); V[2] = ToLinear(S[2]); V[3] = S[3]; }
-                    }
-                    }
-                    if (bChanged) { m_EditID = R.m_ID; std::copy(V, V + 4, m_Edit); }
-                    if (ImGui::IsItemDeactivatedAfterEdit() && m_EditID == R.m_ID)
-                    {
-                        m_EditID = 0;
-                        Edit(std::format("SetOverride -Id {:016X} -Value {}", R.m_ID, xeditor::Quote(FormatValue(R.m_Type, { V[0], V[1], V[2], V[3] }, {}))));
-                    }
-                }
-                ImGui::PopID();
+                if (R.m_Source == row::source::ORPHAN_ID || R.m_Source == row::source::ORPHAN_TYPE) { ++m_nOrphans; continue; }
+                xmaterial_instance::param_row Row{ .m_Name = R.m_Name, .m_ID = R.m_ID, .m_Type = R.m_Type, .m_bAlpha = !R.m_pDecl || R.m_pDecl->m_bAlpha, .m_V = R.m_Value, .m_Texture = R.m_Texture };
+                if (R.m_ID == xmaterial::double_sided_param_id_v) { Row.m_bToggle = true; D.m_DoubleSidedRow = Row; m_DoubleSidedSource = R.m_Source; continue; }     // the Render Settings
+                if (R.m_ID == xmaterial::alpha_cutoff_param_id_v) { D.m_AlphaCutoffRow = Row; m_AlphaCutoffSource = R.m_Source; continue; }
+                D.m_Params.push_back(Row);
+                m_Sources.push_back(R.m_Source);
             }
-            if (!Pending.empty()) { xeditor::Run(m_Undo, Pending); m_Resolution.reset(); }
+            m_Shown = D.m_Params;
         }
 
         // (Re)builds what the preview draws: the instance's material with the instance's textures. After every compile.

@@ -126,6 +126,10 @@ namespace xmaterial_instance_compiler
             DataFile.m_BlockBytes    = Manifest.m_BlockBytes;
             DataFile.m_pParams       = Block.empty() ? nullptr : Block.data();
             DataFile.m_LayoutHash    = Manifest.m_LayoutHash;
+            DataFile.m_DoubleSided   = -1;                          // set by the chain (this instance or a parent): its value, else the material's own setting
+            if (auto It = std::ranges::find(Resolved.m_Params, xmaterial::double_sided_param_id_v, &xmaterial_instance::resolved_param::m_ID); It != Resolved.m_Params.end() && It->m_Source >= 0)
+                DataFile.m_DoubleSided = It->m_Value.m_X > 0.5f ? 1 : 0;
+            if (DataFile.m_DoubleSided >= 0) LogMessage(xresource_pipeline::msg_type::INFO, std::format("Double Sided: {} (the instance's)", DataFile.m_DoubleSided ? "on" : "off"));
             displayProgressBar("Compiling Constructing data file", 1.0f);
 
             //

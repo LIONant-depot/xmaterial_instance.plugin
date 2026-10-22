@@ -6,6 +6,7 @@
 #include "plugins/xtexture.plugin/source/xtexture_xgpu_rsc_loader.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_xgpu_rsc_loader.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_params.h"
+#include "plugins/xmaterial.plugin/source/xmaterial_render_settings.h"     // the system parameters (Double Sided, Alpha Cutoff)
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_resolve.h"
 
@@ -62,16 +63,110 @@ namespace xmaterial_instance
     };
     XPROPERTY_REG(override_entry)
 
+    // One parameter of the material as the instance's inspector shows it (descriptor::m_Params, in the material's order): its name, then its value through a view of
+    // its type (sprop_union_group: one row). Filled by the editor from the resolved instance (the value here, a parent's or the default), never saved; an edit becomes
+    // a SetOverride. Values are linear.
+    struct param_row
+    {
+        std::string             m_Name;
+        xmaterial::param_id     m_ID        = 0;                // not shown: what the commands name it by
+        xmaterial::param_type   m_Type      = xmaterial::param_type::FLOAT;
+        bool                    m_bAlpha    = true;             // COLOR: its alpha means something (else an RGB row)
+        bool                    m_bToggle   = false;            // FLOAT 0 or 1 shown as a checkbox (Double Sided)
+        xmaterial::float4v      m_V;
+        xrsc::texture_ref       m_Texture;
+
+        static std::pair<const xproperty::type::object*, void*> ValueView(param_row& O) noexcept;
+
+        XPROPERTY_DEF
+        ( "param_row", param_row, xproperty::settings::sprop_union_group
+        , obj_member<"Name",  &param_row::m_Name, member_flags<flags::SHOW_READONLY>>
+        , obj_member<"Value", +[](param_row& O) -> std::pair<const xproperty::type::object*, void*> { return ValueView(O); }>
+        )
+    };
+    XPROPERTY_REG(param_row)
+
+    // The sides of param_row's value: each is the row itself, seen as one type
+    struct param_float_view   : param_row { XPROPERTY_DEF("param: float",   param_float_view,   obj_member<"Value", +[](param_float_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>) };
+    struct param_float2_view  : param_row { XPROPERTY_DEF("param: float2",  param_float2_view,  xproperty::settings::vector2_group
+        , obj_member<"X", +[](param_float2_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
+        , obj_member<"Y", +[](param_float2_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>) };
+    struct param_float3_view  : param_row { XPROPERTY_DEF("param: float3",  param_float3_view,  xproperty::settings::vector3_group
+        , obj_member<"X", +[](param_float3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
+        , obj_member<"Y", +[](param_float3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>
+        , obj_member<"Z", +[](param_float3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }>) };
+    struct param_float4_view  : param_row { XPROPERTY_DEF("param: float4",  param_float4_view,  xproperty::settings::vector4_group
+        , obj_member<"X", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
+        , obj_member<"Y", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>
+        , obj_member<"Z", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }>
+        , obj_member<"W", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_W; else O.m_V.m_W = V; }>) };
+    struct param_color3_view  : param_row { XPROPERTY_DEF("param: color3",  param_color3_view,  xproperty::settings::color3_group
+        , obj_member<"R", +[](param_color3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
+        , obj_member<"G", +[](param_color3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>
+        , obj_member<"B", +[](param_color3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }>) };
+    struct param_color4_view  : param_row { XPROPERTY_DEF("param: color4",  param_color4_view,  xproperty::settings::color4_group
+        , obj_member<"R", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
+        , obj_member<"G", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>
+        , obj_member<"B", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }>
+        , obj_member<"A", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_W; else O.m_V.m_W = V; }>) };
+    struct param_toggle_view  : param_row { XPROPERTY_DEF("param: toggle",  param_toggle_view,  obj_member<"Value", +[](param_toggle_view& O, bool bRead, bool& V) { if (bRead) V = O.m_V.m_X > 0.5f; else O.m_V.m_X = V ? 1.0f : 0.0f; }>) };
+    struct param_texture_view : param_row { XPROPERTY_DEF("param: texture", param_texture_view, obj_member<"Value", &param_row::m_Texture>) };
+    XPROPERTY_REG(param_float_view)
+    XPROPERTY_REG(param_float2_view)
+    XPROPERTY_REG(param_float3_view)
+    XPROPERTY_REG(param_float4_view)
+    XPROPERTY_REG(param_color3_view)
+    XPROPERTY_REG(param_color4_view)
+    XPROPERTY_REG(param_texture_view)
+    XPROPERTY_REG(param_toggle_view)
+
+    inline std::pair<const xproperty::type::object*, void*> param_row::ValueView(param_row& O) noexcept
+    {
+        using T = xmaterial::param_type;
+        switch (O.m_Type)
+        {
+        case T::FLOAT:   return O.m_bToggle ? std::pair<const xproperty::type::object*, void*>{ xproperty::getObjectByType<param_toggle_view>(), &O }
+                                            : std::pair<const xproperty::type::object*, void*>{ xproperty::getObjectByType<param_float_view>(), &O };
+        case T::FLOAT2:  return { xproperty::getObjectByType<param_float2_view>(),  &O };
+        case T::FLOAT3:  return { xproperty::getObjectByType<param_float3_view>(),  &O };
+        case T::FLOAT4:  return { xproperty::getObjectByType<param_float4_view>(),  &O };
+        case T::COLOR:   return O.m_bAlpha ? std::pair<const xproperty::type::object*, void*>{ xproperty::getObjectByType<param_color4_view>(), &O }
+                                           : std::pair<const xproperty::type::object*, void*>{ xproperty::getObjectByType<param_color3_view>(), &O };
+        case T::TEXTURE: return { xproperty::getObjectByType<param_texture_view>(), &O };
+        }
+        return { nullptr, nullptr };
+    }
+
     // v2 (m_DescVersion 2) keeps what the person set in m_Overrides. The Textures, TextureDefaults and FinalTextures of v1 are only read: an old file is turned
     // into overrides when it is read (FoldLegacy) and is written back as v2 on save. The material compiler still writes its template (MaterialInstance.txt) with
     // these lists: the textures of the material in sampler order and the slots it exposes, which material_layout reads.
     struct descriptor : xresource_pipeline::descriptor::base
     {
+        inline static constexpr auto base_filters_v = std::array{ xrsc::material_type_guid_v, xrsc::material_instance_type_guid_v };
+
         XPROPERTY_VDEF
         ( "material_instance_descriptor",   descriptor
         , obj_member<"Version",             &descriptor::m_DescVersion,         member_flags<flags::DONT_SHOW>>
-        , obj_member<"MaterialRef",         &descriptor::m_MaterialRef >
-        , obj_member<"ParentRef",           &descriptor::m_ParentRef >
+        // Base: what the instance is made from, a material or another instance (a variant), in one field (not saved: it is MaterialRef or ParentRef). The editor
+        // turns a pick into SetMaterial or SetParent; with an instance as the base, MaterialRef shows, read only (it is the base's)
+        , obj_member<"Base", +[](descriptor& O, bool bRead, xresource::full_guid& Guid)
+            {
+                if (bRead) Guid = O.m_ParentRef.empty() ? xresource::full_guid{ O.m_MaterialRef.m_Instance, xrsc::material_type_guid_v } : xresource::full_guid{ O.m_ParentRef.m_Instance, xrsc::material_instance_type_guid_v };
+                // written: nothing here, the editor's SetMaterial / SetParent makes the change (what was set carries over, undo has the whole state before)
+            }
+            , member_ui<xresource::full_guid>::type_filters<base_filters_v>, member_flags<flags::DONT_SAVE>
+            , member_help<"A material, or another material instance to make a variant of (it inherits what that one sets)">>
+        , obj_member<"MaterialRef",         &descriptor::m_MaterialRef,         member_dynamic_flags<+[](const descriptor& O) { xproperty::flags::type F{}; F.m_bDontShow = O.m_ParentRef.empty(); F.m_bShowReadOnly = true; return F; }>>
+        , obj_member<"ParentRef",           &descriptor::m_ParentRef,           member_flags<flags::DONT_SHOW>>
+        // The render settings an instance may set (system parameters, not the graph's), overrides like the parameters
+        , obj_scope<"Render Settings"
+            , obj_member<"Double Sided",    &descriptor::m_DoubleSidedRow,      member_flags<flags::DONT_SAVE>, member_help<"Back faces are drawn too, lit by their own side: a pipeline of its own, not a material of its own">>
+            , obj_member<"Alpha Cutoff",    &descriptor::m_AlphaCutoffRow,      member_flags<flags::DONT_SAVE>
+                , member_dynamic_flags<+[](const descriptor& O) { xproperty::flags::type F{}; F.m_bDontShow = O.m_AlphaCutoffRow.m_Name.empty(); F.m_bDontSave = true; return F; }>
+                , member_help<"Masked: alpha below this is cut out">>
+            , member_ui_open<true>>
+        , obj_member<"Parameters",          &descriptor::m_Params,              member_flags<flags::DONT_SAVE>, member_array_size_readonly<>, member_ui_open<true>
+            , member_help<"The material's parameters, in its order: the value this instance sets (marked, > goes back to inheriting it), a parent's or the material's default">>
         , obj_member<"Overrides",           &descriptor::m_Overrides,           member_flags<flags::DONT_SHOW>>
         , obj_member<"Textures",            &descriptor::m_lTextures,           member_flags<flags::DONT_SHOW>>
         , obj_member<"TextureDefaults",     &descriptor::m_lTextureDefaults,    member_flags<flags::DONT_SHOW>>
@@ -184,6 +279,10 @@ namespace xmaterial_instance
         xrsc::material_ref                  m_MaterialRef           = {};       // the root material (with a parent: the parent's)
         xrsc::material_instance_ref         m_ParentRef             = {};       // optional: inherit from another instance
         std::vector<override_entry>         m_Overrides             = {};       // sorted by m_ID
+
+        param_row                           m_DoubleSidedRow        = {};       // the editor's view of the render settings (never saved; empty name: the material has none)
+        param_row                           m_AlphaCutoffRow        = {};
+        std::vector<param_row>              m_Params                = {};       // the editor's view of the material's parameters, in its order (never saved, see param_row)
         std::vector<default_texture_entry>  m_lTextureDefaults      = {};       // v1 / the material's template only
         std::vector<xrsc::texture_ref>      m_lTextures             = {};
         std::vector<final_texture_entry>    m_lFinalTextures        = {};

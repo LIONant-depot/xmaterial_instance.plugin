@@ -12,7 +12,8 @@ namespace xmaterial_instance
         // v2: the instance is fully resolved (documentation/material_contract.md section 5): its parameter block in the material's layout + the layout hash the renderer
         //     checks against the material's. A v1 file (older size and version) is refused by the serializer and loads as null, like an uncompiled resource; the pipeline
         //     recompiles it because the compiler executable is newer.
-        inline static constexpr auto xserializer_version_v = 2;
+        // v3: the instance's Double Sided (m_DoubleSided), resolved through its chain
+        inline static constexpr auto xserializer_version_v = 3;
 
         //-------------------------------------------------------------------------
 
@@ -34,6 +35,7 @@ namespace xmaterial_instance
         std::uint16_t       m_BlockBytes;               // the resolved parameter block, a multiple of 16 (0: the material reads no parameters)
         float*              m_pParams;                  // m_BlockBytes/4 floats in the material's layout
         std::uint64_t       m_LayoutHash;               // the manifest's: must equal the material's (xmaterial::data_file::m_LayoutHash)
+        std::int8_t         m_DoubleSided;              // -1: the material's render setting; 0 off, 1 on: the instance's (or a parent's) override
     };
 
     //-------------------------------------------------------------------------
@@ -61,6 +63,7 @@ namespace xserializer::io_functions
         || (Err = Stream.Serialize(MaterialI.m_pParams, MaterialI.m_BlockBytes / 4u))
         || (Err = Stream.Serialize(MaterialI.m_BlockBytes))
         || (Err = Stream.Serialize(MaterialI.m_LayoutHash))
+        || (Err = Stream.Serialize(MaterialI.m_DoubleSided))
         ;
 
         return Err;

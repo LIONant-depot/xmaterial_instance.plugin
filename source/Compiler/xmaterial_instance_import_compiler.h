@@ -694,6 +694,33 @@ namespace xmaterial_instance::import
             // Emission is ORME.a times the albedo: an emitter's albedo is its emissive color (brightest channel 1)
             const float EmissiveMax = std::max({ Emissive[0], Emissive[1], Emissive[2] });
 
+            // A material with factors (the default PBR material: BaseColorFactor, RoughnessFactor, MetallicFactor, EmissiveColor): the model's constants go
+            // there, over one white map shared by the model's materials, instead of a texture made for each material (render_settings_plan.md part two)
+            std::vector<xmaterial_instance::override_entry> Factors;
+            auto Decls = [&](xrsc::material_ref Material) { xmaterial_instance::material_layout L; L.Load(m_ProjectPath, Material); return std::move(L.m_Manifest.m_Decls); };
+            auto Has   = [](const std::vector<xmaterial::param_decl>& D, std::initializer_list<const char*> Names)
+            {
+                return std::ranges::all_of(Names, [&](const char* pName) { return std::ranges::find(D, std::string(pName), &xmaterial::param_decl::m_Name) != D.end(); });
+            };
+            auto Factor = [&](const std::vector<xmaterial::param_decl>& D, const char* pName, xmaterial::float4v V)       // sparse: only what differs from the default
+            {
+                const auto& Decl = *std::ranges::find(D, std::string(pName), &xmaterial::param_decl::m_Name);
+                const auto& Def  = Decl.m_Default;
+                if (V.m_X == Def.m_X && V.m_Y == Def.m_Y && V.m_Z == Def.m_Z && V.m_W == Def.m_W) return;
+                Factors.push_back({ .m_ID = Decl.m_ID, .m_Type = Decl.m_Type, .m_Value = V, .m_NameHint = pName });
+            };
+            auto White = [&]
+            {
+                return Texture("white", "White", InstanceGuid, [&](xtexture_rsc::descriptor& D)
+                {
+                    D.m_UsageType     = xtexture_rsc::usage_type::INTENSITY;
+                    D.m_Compression   = xtexture_rsc::compression_format::RGBA_UNCOMPRESSED;
+                    D.m_bSRGB         = false;
+                    D.m_bGenerateMips = false;
+                    D.m_InputVariant  = Mixed({ Constant(1, to::R), Constant(1, to::G), Constant(1, to::B), Constant(1, to::A) });
+                });
+            };
+
             //
             // Albedo
             //
@@ -759,6 +786,12 @@ namespace xmaterial_instance::import
                     D.m_InputVariant  = Mixed({ Constant(1, to::R), Constant(0, to::G), Constant(1, to::B), Constant(1, to::A) });
                 });
             }
+            else if (const auto D = Decls(m_Settings.m_Material); Has(D, { "BaseColorFactor" }))
+            {
+                const auto C = EmissiveMax > 0 ? std::array{ Emissive[0] / EmissiveMax, Emissive[1] / EmissiveMax, Emissive[2] / EmissiveMax } : std::array{ Color[0], Color[1], Color[2] };
+                Albedo = White();
+                Factor(D, "BaseColorFactor", { C[0], C[1], C[2], 1 });
+            }
             else
             {
                 const auto C = EmissiveMax > 0 ? std::array{ Emissive[0] / EmissiveMax, Emissive[1] / EmissiveMax, Emissive[2] / EmissiveMax } : std::array{ Color[0], Color[1], Color[2] };
@@ -822,7 +855,15 @@ namespace xmaterial_instance::import
             else                                      { Mixes.push_back(Constant(Emission, to::A));                Key += std::format("|e{:.0f}", Emission); }
 
             const bool bConstantORME = Size.empty();
-            const auto ORME = Texture(Key, (bConstantORME ? M.m_Name : Stem(Size)) + " (ORME)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
+            const auto ORMEDecls     = bConstantORME ? Decls(bAlphaTest ? m_Settings.m_AlphaTest : m_Settings.m_Material) : std::vector<xmaterial::param_decl>{};
+            const bool bORMEFactors  = bConstantORME && Has(ORMEDecls, { "RoughnessFactor", "MetallicFactor", "EmissiveColor" });
+            if (bORMEFactors)
+            {
+                Factor(ORMEDecls, "RoughnessFactor", { Roughness, 0, 0, 0 });
+                Factor(ORMEDecls, "MetallicFactor",  { 0, 0, 0, 0 });
+                Factor(ORMEDecls, "EmissiveColor",   { Emission, Emission, Emission, 1 });
+            }
+            const auto ORME = bORMEFactors ? White() : Texture(Key, (bConstantORME ? M.m_Name : Stem(Size)) + " (ORME)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
             {
                 D.m_UsageType     = xtexture_rsc::usage_type::INTENSITY;         // data (occlusion, roughness, metalness, emission), not a color: no alpha coverage, no average-color fill
                 D.m_Compression   = bConstantORME ? xtexture_rsc::compression_format::RGBA_UNCOMPRESSED : m_Settings.ORME();
@@ -850,6 +891,7 @@ namespace xmaterial_instance::import
                 else if (Slot == "SamplerORME")   Instance.m_lTextures[i] = ORME;
             }
             Instance.FoldLegacy();                                       // the slots the import set are overrides of the material's textures (v2)
+            Instance.m_Overrides.insert(Instance.m_Overrides.end(), Factors.begin(), Factors.end());
 
             const auto Folder = DescriptorFolder("MaterialInstance", InstanceGuid.m_Instance.m_Value);
             std::error_code Ec;
