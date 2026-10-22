@@ -56,7 +56,7 @@ namespace xmaterial_instance
         {
             if (It->path().filename() != L"Descriptor.txt") continue;
             auto pFile = std::make_unique<instance_file>();
-            pFile->m_Key = std::wcstoull(It->path().parent_path().stem().c_str(), nullptr, 16);
+            pFile->m_Key = std::wcstoull(It->path().parent_path().stem().wstring().c_str(), nullptr, 16);
             xproperty::settings::context C;
             if (!pFile->m_Key || pFile->m_Desc.Serialize(true, DescriptorPath(Descriptors, pFile->m_Key), C) || pFile->m_Desc.m_MaterialRef.m_Instance.m_Value != Material) continue;
             Out.push_back(std::move(pFile));
