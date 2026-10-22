@@ -135,6 +135,14 @@ namespace xmaterial_instance::import
                 if (Ext == pExt) return true;
             return false;
         }
+        // A path relative to the project as the project writes it: with \ on every platform. It goes in the descriptors and in the keys of the
+        // virtual textures' guids, so a project compiled on Linux makes the same textures (the same guids) as on Windows.
+        static std::wstring ProjectPath(const std::filesystem::path& Relative) noexcept
+        {
+            auto Path = Relative.lexically_normal().wstring();
+            std::replace(Path.begin(), Path.end(), L'/', L'\\');
+            return Path;
+        }
         // NameKey without what a file manager or a download adds to a copy's name: "x - Copy", "x - Copy (2)", "x (1)", "x_copy", "x-copy". The last resort of Resolve:
         // the texture the model names is next to it under such a name
         static std::wstring CopyKey(const std::filesystem::path& Name) noexcept
@@ -182,7 +190,7 @@ namespace xmaterial_instance::import
                     for (const wchar_t* pSeparator : { L"_", L"-", L" ", L"" })
                         if (Stem == Base + pSeparator + pToken)
                         {
-                            const auto Relative = fs::relative(It->path(), fs::path(m_ProjectPath), F).lexically_normal().make_preferred().wstring();
+                            const auto Relative = ProjectPath(fs::relative(It->path(), fs::path(m_ProjectPath), F));
                             if (!F && !Relative.starts_with(L"..")) return Relative;
                         }
                 }
@@ -309,7 +317,7 @@ namespace xmaterial_instance::import
             }
             if (!bAsGiven && m_Info) m_Info(std::format("Import Materials: texture {} found as {}", Raw, UTF8(Found)));
 
-            const auto Relative = fs::relative(Found, Project, Ec).lexically_normal().make_preferred().wstring();
+            const auto Relative = ProjectPath(fs::relative(Found, Project, Ec));
             if (Ec || Relative.starts_with(L"..")) { m_Warning(std::format("Import Materials: texture {} is outside the project", UTF8(Found))); return Missing(); }
             return Relative;
         }
@@ -500,7 +508,7 @@ namespace xmaterial_instance::import
                     {
                         const auto It = Images.find(Fold(Name) + pSeparator + xstrtool::UTF8ToUTF16(pWord));
                         if (It == Images.end()) continue;
-                        const auto Relative = fs::relative(It->second.m_Path, Project, Ec).lexically_normal().make_preferred().wstring();
+                        const auto Relative = ProjectPath(fs::relative(It->second.m_Path, Project, Ec));
                         if (!Ec && !Relative.starts_with(L"..")) return Relative;
                     }
             }
@@ -540,7 +548,7 @@ namespace xmaterial_instance::import
             {
                 std::error_code F;
                 if (!It->is_regular_file(F) || !IsImage(It->path())) continue;
-                const auto Relative = fs::relative(It->path(), Project, F).lexically_normal().make_preferred().wstring();
+                const auto Relative = ProjectPath(fs::relative(It->path(), Project, F));
                 if (F || Relative.starts_with(L"..") || m_Claimed.contains(Fold(Relative))) continue;
 
                 const std::wstring Stem = Fold(It->path().stem().wstring());
