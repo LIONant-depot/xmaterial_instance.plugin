@@ -86,29 +86,30 @@ namespace xmaterial_instance
     };
     XPROPERTY_REG(param_row)
 
-    // The sides of param_row's value: each is the row itself, seen as one type
-    struct param_float_view   : param_row { XPROPERTY_DEF("param: float",   param_float_view,   obj_member<"Value", +[](param_float_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>) };
+    // The sides of param_row's value: each is the row itself, seen as one type. Numbers drag finely (0.005 a pixel) and are not bounded here (the material's
+    // valid range is applied when the instance is compiled)
+    struct param_float_view   : param_row { XPROPERTY_DEF("param: float",   param_float_view,   obj_member<"Value", +[](param_float_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }, member_ui<float>::drag_bar<0.005f>>) };
     struct param_float2_view  : param_row { XPROPERTY_DEF("param: float2",  param_float2_view,  xproperty::settings::vector2_group
-        , obj_member<"X", +[](param_float2_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
-        , obj_member<"Y", +[](param_float2_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>) };
+        , obj_member<"X", +[](param_float2_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"Y", +[](param_float2_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }, member_ui<float>::drag_bar<0.005f>>) };
     struct param_float3_view  : param_row { XPROPERTY_DEF("param: float3",  param_float3_view,  xproperty::settings::vector3_group
-        , obj_member<"X", +[](param_float3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
-        , obj_member<"Y", +[](param_float3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>
-        , obj_member<"Z", +[](param_float3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }>) };
+        , obj_member<"X", +[](param_float3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"Y", +[](param_float3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"Z", +[](param_float3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }, member_ui<float>::drag_bar<0.005f>>) };
     struct param_float4_view  : param_row { XPROPERTY_DEF("param: float4",  param_float4_view,  xproperty::settings::vector4_group
-        , obj_member<"X", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
-        , obj_member<"Y", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>
-        , obj_member<"Z", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }>
-        , obj_member<"W", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_W; else O.m_V.m_W = V; }>) };
+        , obj_member<"X", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"Y", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"Z", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"W", +[](param_float4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_W; else O.m_V.m_W = V; }, member_ui<float>::drag_bar<0.005f>>) };
     struct param_color3_view  : param_row { XPROPERTY_DEF("param: color3",  param_color3_view,  xproperty::settings::color3_group
-        , obj_member<"R", +[](param_color3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
-        , obj_member<"G", +[](param_color3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>
-        , obj_member<"B", +[](param_color3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }>) };
+        , obj_member<"R", +[](param_color3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"G", +[](param_color3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"B", +[](param_color3_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }, member_ui<float>::drag_bar<0.005f>>) };
     struct param_color4_view  : param_row { XPROPERTY_DEF("param: color4",  param_color4_view,  xproperty::settings::color4_group
-        , obj_member<"R", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }>
-        , obj_member<"G", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }>
-        , obj_member<"B", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }>
-        , obj_member<"A", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_W; else O.m_V.m_W = V; }>) };
+        , obj_member<"R", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_X; else O.m_V.m_X = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"G", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Y; else O.m_V.m_Y = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"B", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_Z; else O.m_V.m_Z = V; }, member_ui<float>::drag_bar<0.005f>>
+        , obj_member<"A", +[](param_color4_view& O, bool bRead, float& V) { if (bRead) V = O.m_V.m_W; else O.m_V.m_W = V; }, member_ui<float>::drag_bar<0.005f>>) };
     struct param_toggle_view  : param_row { XPROPERTY_DEF("param: toggle",  param_toggle_view,  obj_member<"Value", +[](param_toggle_view& O, bool bRead, bool& V) { if (bRead) V = O.m_V.m_X > 0.5f; else O.m_V.m_X = V ? 1.0f : 0.0f; }>) };
     struct param_texture_view : param_row { XPROPERTY_DEF("param: texture", param_texture_view, obj_member<"Value", &param_row::m_Texture>) };
     XPROPERTY_REG(param_float_view)
