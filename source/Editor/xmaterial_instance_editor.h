@@ -434,6 +434,7 @@ namespace xmaterial_instance_editor
             AddPanel("Material Instance Preview", dock::center, [this] { UpdateLivePreview(); m_Preview.Render(); });
             AddPanel("Description",               dock::right,  [this] { ShowDescription(); });
 
+            m_Preview.m_Model = e19::mesh_manager::model::CUBE;       // the mesh it opens on (the Meshes list changes it)
             if (pDevice && m_Preview.Init(*pDevice)) ReloadPreview();
         }
 
