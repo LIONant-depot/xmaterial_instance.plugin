@@ -622,7 +622,7 @@ namespace xmaterial_instance_editor
 
             const auto& Decls = m_Resolution->m_Layout.m_Manifest.m_Decls;
             auto Rows_ = Rows(*m_Resolution, D);
-            std::ranges::stable_sort(Rows_, {}, [&](const row& R) { return R.m_pDecl ? std::pair{ R.m_pDecl->m_Order, R.m_pDecl - Decls.data() } : std::pair{ INT32_MAX, std::ptrdiff_t(Decls.size()) }; });
+            std::ranges::stable_sort(Rows_, {}, [&](const row& R) { return xmaterial::InspectorOrder(R.m_pDecl, Decls); });
             for (const auto& R : Rows_)
             {
                 if (R.m_Source == row::source::ORPHAN_ID || R.m_Source == row::source::ORPHAN_TYPE) { ++m_nOrphans; continue; }
