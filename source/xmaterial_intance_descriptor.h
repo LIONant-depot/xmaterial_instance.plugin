@@ -279,7 +279,10 @@ namespace xmaterial_instance
         int                                 m_DescVersion           = 2;
         xrsc::material_ref                  m_MaterialRef           = {};       // the root material (with a parent: the parent's)
         xrsc::material_instance_ref         m_ParentRef             = {};       // optional: inherit from another instance
-        std::vector<override_entry>         m_Overrides             = {};       // sorted by m_ID
+        // sorted by m_ID, addressed by it ("Overrides[G:id]/..."): a path names a parameter, not a place. A file written before (by place,
+        // "Overrides[G:0]/...") reads the same - each entry's ID, its first property, keys it - and is written by id from its next save
+        // (UpgradeProject: UpgradeKeyedOverrides)
+        xproperty::keyed_vector<override_entry, &override_entry::m_ID> m_Overrides = {};
 
         param_row                           m_DoubleSidedRow        = {};       // the editor's view of the render settings (never saved; empty name: the material has none)
         param_row                           m_AlphaCutoffRow        = {};

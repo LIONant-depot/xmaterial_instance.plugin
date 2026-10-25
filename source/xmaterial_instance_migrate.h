@@ -9,9 +9,11 @@
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_intance_descriptor.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 namespace xmaterial_instance
 {
@@ -77,6 +79,38 @@ namespace xmaterial_instance
             ++n;
         }
         return n;
+    }
+
+    // UpgradeProject: the instance files that still address their overrides by place ("Overrides[G:0]/..." - 0 is never a parameter id)
+    // read and written again, by id (descriptor::m_Overrides). Returns the report: how many, and the ones that could not be read
+    inline std::string UpgradeKeyedOverrides(const std::wstring& Descriptors) noexcept
+    {
+        int         n = 0, nLeft = 0;
+        std::string Left;
+        std::error_code Ec;
+        const std::filesystem::path Folder = std::filesystem::path(Descriptors) / L"MaterialInstance";
+        for (std::filesystem::recursive_directory_iterator It(Folder, Ec), End; !Ec && It != End; It.increment(Ec))
+        {
+            if (It->path().filename() != L"Descriptor.txt") continue;
+            std::ifstream F(It->path(), std::ios::binary);
+            const std::string Text{ std::istreambuf_iterator<char>(F), std::istreambuf_iterator<char>() };
+            F.close();
+            if (Text.find("/Overrides[G:0]/") == std::string::npos) continue;
+            const std::uint64_t Key = std::wcstoull(It->path().parent_path().stem().wstring().c_str(), nullptr, 16);
+            // (the library watches the folder and reads a file as it is written: a file busy for a moment is tried again)
+            bool bDone = false;
+            for (int Try = 0; Try < 5 && Key && !bDone; ++Try)
+            {
+                if (Try) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                descriptor Desc;
+                xproperty::settings::context C;
+                bDone = !Desc.Serialize(true, DescriptorPath(Descriptors, Key), C) && !Desc.Serialize(false, DescriptorPath(Descriptors, Key), C);
+            }
+            if (!bDone) { ++nLeft; Left += std::format("  {:016X}\n", Key); continue; }
+            ++n;
+        }
+        return std::format("UpgradeProject: {} material instance(s) whose overrides were addressed by place, written by parameter id; {} left as they are\n{}{}"
+                          , n, nLeft, nLeft ? "Left as they are:\n" : "", Left);
     }
 
     // The instance files of a material as text, for the undo: "<key hex> <size>\n<bytes>" per file

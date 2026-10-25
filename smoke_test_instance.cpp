@@ -160,7 +160,8 @@ namespace
         {
             std::ifstream In(fs::path(Back), std::ios::binary);
             std::string Text((std::istreambuf_iterator<char>(In)), {});
-            Check(Text.find("material_instance_descriptor/Version") != std::string::npos && Text.find("Overrides[G:0]/ID") != std::string::npos, "the file has Version and Overrides rows");
+            Check(Text.find("material_instance_descriptor/Version") != std::string::npos && Text.find("/Overrides[G:") != std::string::npos && Text.find("Overrides[G:0]/") == std::string::npos
+                 , "the file has Version and Overrides rows, by parameter id (not by place)");
         }
         descriptor Again;
         Check(Read(Back, Again) && Again.m_DescVersion == 2 && Again.m_Overrides.size() == 1 && Again.m_Overrides[0].m_ID == ALBEDO && Again.m_Overrides[0].m_Texture == Tex(T_USER), "v2 reads back the same");
