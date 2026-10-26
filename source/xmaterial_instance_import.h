@@ -73,6 +73,33 @@ namespace xmaterial_instance::import
         return { .m_Instance = xresource::instance_guid::GenerateGUIDCopy(std::format("{:016X}_material_{}", Owner.m_Value, MaterialName).c_str()) };
     }
 
+    // A geometry descriptor's materials (GeomStatic, GeomSkin) are saved by their name: "MaterialDetailsList[G:key]/..." (key = MaterialKey(name),
+    // xproperty::keyed_vector), each with its own Instance. The slots - Refs, one per material by place - are what the editor and SyncSlots edit,
+    // not saved: before a save they go into the materials (SlotsToMaterials), after a read they come back (SlotsFromMaterials). A file of the old
+    // form had them in Refs, by place as its materials: they pair as they are. source/Tools/Scripts/convert_keyed_geom_materials.py: the same key
+    inline std::uint64_t MaterialKey(std::string_view Name) noexcept           // FNV-1a 64 of the name's bytes
+    {
+        std::uint64_t H = 14695981039346656037ull;
+        for (const char c : Name) { H ^= std::uint8_t(c); H *= 1099511628211ull; }
+        return H;
+    }
+    template<typename T_MATERIALS>
+    void SlotsToMaterials(T_MATERIALS& Materials, const std::vector<xrsc::material_instance_ref>& Refs) noexcept
+    {
+        for (std::size_t i = 0; i < Materials.size(); ++i) Materials[i].m_Instance = i < Refs.size() ? Refs[i] : xrsc::material_instance_ref{};
+    }
+    template<typename T_MATERIALS>
+    void SlotsFromMaterials(T_MATERIALS& Materials, std::vector<xrsc::material_instance_ref>& Refs) noexcept
+    {
+        const bool bOldForm = !Refs.empty();                    // (Refs is emptied before a read and never saved now: only an old file fills it)
+        Refs.resize(Materials.size());
+        for (std::size_t i = 0; i < Materials.size(); ++i)
+        {
+            if (bOldForm) Materials[i].m_Instance = Refs[i];
+            else          Refs[i] = Materials[i].m_Instance;
+        }
+    }
+
     // The slots of a geometry: Names[i] is the material the slot Refs[i] is for. With the import on, an empty slot takes the imported instance;
     // with it off, a slot that still has the imported one is emptied. Returns whether anything changed.
     template<typename T_NAME_LIST>
