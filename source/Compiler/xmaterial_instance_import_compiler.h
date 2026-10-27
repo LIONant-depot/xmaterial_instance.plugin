@@ -830,7 +830,11 @@ namespace xmaterial_instance::import
             //
             // ORME: maps where the model has them (all one size, the texture compiler mixes them), constants for the rest
             //
-            const float Roughness = Shininess > 0 ? std::sqrt(2.0f / (Shininess + 2.0f)) : 0.8f;   // Blinn-Phong exponent to roughness
+            // the model's PBR factors when it has them (glTF, an OBJ's Pr / Pm), else the roughness of the Blinn-Phong exponent and no metal
+            const auto  RoughnessParam = Param(M, "RoughnessFactor"), MetallicParam = Param(M, "MetallicFactor");
+            const float Roughness = !RoughnessParam.empty() ? std::clamp(std::strtof(RoughnessParam.c_str(), nullptr), 0.0f, 1.0f)
+                                  : Shininess > 0 ? std::sqrt(2.0f / (Shininess + 2.0f)) : 0.8f;   // Blinn-Phong exponent to roughness
+            const float Metallic  = !MetallicParam.empty() ? std::clamp(std::strtof(MetallicParam.c_str(), nullptr), 0.0f, 1.0f) : 0.0f;
             const float Emission  = EmissiveMax > 0 ? 1.0f : 0.0f;
 
             std::wstring Size;  // the first map (it names the texture): the texture compiler brings maps of other sizes to the largest
@@ -850,7 +854,7 @@ namespace xmaterial_instance::import
             else if (Usable(Gloss, "glossiness")) { Mixes.push_back(Channel(Gloss, from::R, to::G, true)); Key += "|g:" + xstrtool::UTF16ToUTF8(Gloss); }
             else                            { Mixes.push_back(Constant(Roughness, to::G)); Key += std::format("|r{:.3f}", Roughness); }
             if (Usable(Metal, "metalness")) { Mixes.push_back(Channel(Metal, bSharedRM ? from::B : from::R, to::B)); Key += "|m:" + xstrtool::UTF16ToUTF8(Metal); }
-            else                              Mixes.push_back(Constant(0, to::B));
+            else                            { Mixes.push_back(Constant(Metallic, to::B)); Key += std::format("|m{:.3f}", Metallic); }
             if (Usable(EmissiveMapFile, "emissive")) { Mixes.push_back(Channel(EmissiveMapFile, from::G, to::A)); Key += "|e:" + xstrtool::UTF16ToUTF8(EmissiveMapFile); }   // ponytail: G carries most of the luminance, a mix source for it would do better
             else                                      { Mixes.push_back(Constant(Emission, to::A));                Key += std::format("|e{:.0f}", Emission); }
 
@@ -860,7 +864,7 @@ namespace xmaterial_instance::import
             if (bORMEFactors)
             {
                 Factor(ORMEDecls, "RoughnessFactor", { Roughness, 0, 0, 0 });
-                Factor(ORMEDecls, "MetallicFactor",  { 0, 0, 0, 0 });
+                Factor(ORMEDecls, "MetallicFactor",  { Metallic, 0, 0, 0 });
                 Factor(ORMEDecls, "EmissiveColor",   { Emission, Emission, Emission, 1 });
             }
             const auto ORME = bORMEFactors ? White() : Texture(Key, (bConstantORME ? M.m_Name : Stem(Size)) + " (ORME)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
