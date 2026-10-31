@@ -29,7 +29,7 @@ namespace xmaterial_instance::import
         xtexture_rsc::compression_format_color              m_AlbedoCompression      = xtexture_rsc::compression_format_color::RGB_BC1;
         xtexture_rsc::compression_format_color_cutout       m_AlbedoAlphaCompression = xtexture_rsc::compression_format_color_cutout::RGBA_BC7;
         xtexture_rsc::compression_format_tangent_normal     m_NormalCompression      = xtexture_rsc::compression_format_tangent_normal::RG_BC5;
-        xtexture_rsc::compression_format_color_a            m_ORMECompression        = xtexture_rsc::compression_format_color_a::RGBA_BC7;
+        xtexture_rsc::compression_format_orme               m_ORMECompression        = xtexture_rsc::compression_format_orme::RGBA_BC7;
 
         // The models of some tools have the Y of their normal maps the other way (DirectX against OpenGL): the normal maps made from the model are flipped. Changing it in
         // a geometry editor puts it on the normal maps already made too (SetFlipNormalY), so only those are compiled again.
@@ -62,7 +62,7 @@ namespace xmaterial_instance::import
         , obj_member<"NormalCompression",      &settings::m_NormalCompression,      member_enum_span<xtexture_rsc::compression_format_tangent_normal_v>, member_help<"The compression of the normal maps. For the textures made from now on">>
         , obj_member<"Flip Y for normals",     &settings::m_bFlipNormalY,           member_help<"Flip the Y (green) of the normal maps the import makes, for a model whose normal maps are the other convention (DirectX against OpenGL). Changing it flips the normal maps already made too, and only those are compiled again: the geometry does not have to be">>
         , obj_member<"Normalize normals",      &settings::m_bNormalizeNormals,      member_help<"Normalize the normal maps the import makes before they are compressed, for a model whose normals are bent (not of length one). Changing it puts it on the normal maps already made too, and only those are compiled again: the geometry does not have to be">>
-        , obj_member<"ORMECompression",        &settings::m_ORMECompression,        member_enum_span<xtexture_rsc::compression_format_color_a_v>,        member_help<"The compression of the occlusion/roughness/metalness/emission maps (packed in one texture). For the textures made from now on">>
+        , obj_member<"ORMECompression",        &settings::m_ORMECompression,        member_enum_span<xtexture_rsc::compression_format_orme_v>,           member_help<"The compression of the occlusion/roughness/metalness/emission maps (packed in one texture): BC7, BC3, or BC1 when there is no emissive. For the textures made from now on">>
         )
     };
     XPROPERTY_REG(settings)

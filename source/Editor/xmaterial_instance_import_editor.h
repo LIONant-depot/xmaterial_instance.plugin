@@ -197,7 +197,10 @@ namespace xmaterial_instance::import::editor
         // What the settings say for this texture: none for a texture that is not one of the roles (or made of constants)
         static std::optional<xtexture_rsc::compression_format> Wanted(const settings& S, const xtexture_rsc::descriptor& D) noexcept
         {
-            if (const auto* pMix = std::get_if<xtexture_rsc::mix_source>(&D.m_InputVariant))
+            // (an ORME input is checked as the mix it compiles to)
+            const auto* pORME = std::get_if<xtexture_rsc::orme_input>(&D.m_InputVariant);
+            const auto  ORMEMix = pORME ? pORME->ToMix() : xtexture_rsc::mix_source{};
+            if (const auto* pMix = pORME ? &ORMEMix : std::get_if<xtexture_rsc::mix_source>(&D.m_InputVariant))
             {
                 bool bConstant = true;
                 for (auto& M : pMix->m_Inputs) bConstant = bConstant && M.m_CopyFrom == xtexture_rsc::compositing_from::CUSTOM_CONSTANT;
@@ -209,6 +212,7 @@ namespace xmaterial_instance::import::editor
             case xtexture_rsc::usage_type::TANGENT_NORMAL:  return S.Normal();
             case xtexture_rsc::usage_type::COLOR_AND_ALPHA: return D.m_bSRGB ? S.AlbedoAlpha() : S.ORME();      // the ORME is linear
             case xtexture_rsc::usage_type::COLOR_AND_CUTOUT: return S.AlbedoAlpha();
+            case xtexture_rsc::usage_type::ORME:             return S.ORME();
             default:                                        return std::nullopt;
             }
         }

@@ -384,7 +384,9 @@ namespace xmaterial_instance::import
             xtexture_rsc::descriptor     Descriptor;
             xproperty::settings::context C;
             if (Descriptor.Serialize(true, DescriptorFolder("Texture", Texture.m_Instance.m_Value) + L"\\Descriptor.txt", C)) return false;
-            const auto* pMix = std::get_if<xtexture_rsc::mix_source>(&Descriptor.m_InputVariant);
+            const auto* pORME   = std::get_if<xtexture_rsc::orme_input>(&Descriptor.m_InputVariant);     // (checked as the mix it compiles to)
+            const auto  ORMEMix = pORME ? pORME->ToMix() : xtexture_rsc::mix_source{};
+            const auto* pMix    = pORME ? &ORMEMix : std::get_if<xtexture_rsc::mix_source>(&Descriptor.m_InputVariant);
             return pMix && std::ranges::all_of(pMix->m_Inputs, [](const xtexture_rsc::mix& E) { return E.m_CopyFrom == xtexture_rsc::compositing_from::CUSTOM_CONSTANT; });
         }
 
@@ -869,11 +871,16 @@ namespace xmaterial_instance::import
             }
             const auto ORME = bORMEFactors ? White() : Texture(Key, (bConstantORME ? M.m_Name : Stem(Size)) + " (ORME)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
             {
-                D.m_UsageType     = xtexture_rsc::usage_type::INTENSITY;         // data (occlusion, roughness, metalness, emission), not a color: no alpha coverage, no average-color fill
+                D.m_UsageType     = xtexture_rsc::usage_type::ORME;              // data (occlusion, roughness, metalness, emission), not a color: no alpha coverage, no average-color fill
                 D.m_Compression   = bConstantORME ? xtexture_rsc::compression_format::RGBA_UNCOMPRESSED : m_Settings.ORME();
                 D.m_bSRGB         = false;
                 D.m_bGenerateMips = !bConstantORME;
-                D.m_InputVariant  = Mixed(std::move(Mixes));
+
+                // The four titled channels (the mixes above are O, R, M, E in that order)
+                auto ToChannel = [](const xtexture_rsc::mix& M) { xtexture_rsc::orme_channel C; C.m_CopyFrom = M.m_CopyFrom; C.m_FileName = M.m_FileName; C.m_Constant = M.m_Constant; C.m_bInvert = M.m_bInvert; return C; };
+                xtexture_rsc::orme_input In;
+                In.m_Occlusion = ToChannel(Mixes[0]); In.m_Roughness = ToChannel(Mixes[1]); In.m_Metallic = ToChannel(Mixes[2]); In.m_Emissive = ToChannel(Mixes[3]);
+                D.m_InputVariant  = std::move(In);
             });
 
             //
