@@ -733,7 +733,7 @@ namespace xmaterial_instance::import
                     bAlphaTest = true;
                     Albedo = Texture(xstrtool::UTF16ToUTF8(Diffuse + L"|" + Opacity), Stem(Diffuse) + " (color, cut out)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                     {
-                        D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
+                        D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_CUTOUT;     // an alpha-tested material: the mips keep the coverage
                         D.m_Compression          = m_Settings.AlbedoAlpha();
                         D.m_bFillAveColorByAlpha = true;
                         D.m_InputVariant         = Mixed({ Channel(Diffuse, from::RGB, to::RGB), Channel(Opacity, from::R, to::A) });
@@ -745,7 +745,7 @@ namespace xmaterial_instance::import
                     bAlphaTest = true;
                     Albedo = Texture(xstrtool::UTF16ToUTF8(Diffuse + L"|alpha"), Stem(Diffuse) + " (color and alpha)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                     {
-                        D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
+                        D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_CUTOUT;     // an alpha-tested material: the mips keep the coverage
                         D.m_Compression          = m_Settings.AlbedoAlpha();
                         D.m_bFillAveColorByAlpha = true;
                         D.m_InputVariant         = Single(Diffuse);
@@ -768,7 +768,7 @@ namespace xmaterial_instance::import
                 const auto C = EmissiveMax > 0 ? std::array{ Emissive[0] / EmissiveMax, Emissive[1] / EmissiveMax, Emissive[2] / EmissiveMax } : std::array{ Color[0], Color[1], Color[2] };
                 Albedo = Texture(std::format("color_{:.3f}_{:.3f}_{:.3f}|{}", C[0], C[1], C[2], xstrtool::UTF16ToUTF8(Opacity)), Stem(Opacity) + " (color, cut out)", InstanceGuid, [&](xtexture_rsc::descriptor& D)
                 {
-                    D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_ALPHA;
+                    D.m_UsageType            = xtexture_rsc::usage_type::COLOR_AND_CUTOUT;     // an alpha-tested material: the mips keep the coverage
                     D.m_Compression          = m_Settings.AlbedoAlpha();
                     D.m_bFillAveColorByAlpha = true;
                     D.m_InputVariant         = Mixed({ Constant(C[0], to::R), Constant(C[1], to::G), Constant(C[2], to::B), Channel(Opacity, from::R, to::A) });

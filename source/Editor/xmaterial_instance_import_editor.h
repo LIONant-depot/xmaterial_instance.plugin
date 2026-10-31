@@ -208,6 +208,7 @@ namespace xmaterial_instance::import::editor
             case xtexture_rsc::usage_type::COLOR:           return S.Albedo();
             case xtexture_rsc::usage_type::TANGENT_NORMAL:  return S.Normal();
             case xtexture_rsc::usage_type::COLOR_AND_ALPHA: return D.m_bSRGB ? S.AlbedoAlpha() : S.ORME();      // the ORME is linear
+            case xtexture_rsc::usage_type::COLOR_AND_CUTOUT: return S.AlbedoAlpha();
             default:                                        return std::nullopt;
             }
         }

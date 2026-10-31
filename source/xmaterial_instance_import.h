@@ -27,7 +27,7 @@ namespace xmaterial_instance::import
         // The compression the generated textures are made with, by what they hold. They are ordinary textures once made (edit one in its own editor): a
         // change here is for the textures made from now on. Textures of a constant (a plain color, a flat normal) are never compressed.
         xtexture_rsc::compression_format_color              m_AlbedoCompression      = xtexture_rsc::compression_format_color::RGB_BC1;
-        xtexture_rsc::compression_format_color_a            m_AlbedoAlphaCompression = xtexture_rsc::compression_format_color_a::RGBA_BC7;
+        xtexture_rsc::compression_format_color_cutout       m_AlbedoAlphaCompression = xtexture_rsc::compression_format_color_cutout::RGBA_BC7;
         xtexture_rsc::compression_format_tangent_normal     m_NormalCompression      = xtexture_rsc::compression_format_tangent_normal::RG_BC5;
         xtexture_rsc::compression_format_color_a            m_ORMECompression        = xtexture_rsc::compression_format_color_a::RGBA_BC7;
 
@@ -58,7 +58,7 @@ namespace xmaterial_instance::import
         , obj_member<"Material",    &settings::m_Material,  member_help<"The PBR material the imported instances are made from (slots SamplerAlbedo, SamplerNormal, SamplerORME)">>
         , obj_member<"AlphaTest",   &settings::m_AlphaTest, member_help<"The PBR material for the imported materials that cut out (an opacity map, or a color map with an alpha channel)">>
         , obj_member<"AlbedoCompression",      &settings::m_AlbedoCompression,      member_enum_span<xtexture_rsc::compression_format_color_v>,          member_help<"The compression of the color maps (no alpha). For the textures made from now on">>
-        , obj_member<"AlbedoAlphaCompression", &settings::m_AlbedoAlphaCompression, member_enum_span<xtexture_rsc::compression_format_color_a_v>,        member_help<"The compression of the color maps that cut out (color and alpha). For the textures made from now on">>
+        , obj_member<"AlbedoAlphaCompression", &settings::m_AlbedoAlphaCompression, member_enum_span<xtexture_rsc::compression_format_color_cutout_v>,   member_help<"The compression of the color maps that cut out (Color + Cutout): BC7, or BC1 with 1-bit alpha for half the size. For the textures made from now on">>
         , obj_member<"NormalCompression",      &settings::m_NormalCompression,      member_enum_span<xtexture_rsc::compression_format_tangent_normal_v>, member_help<"The compression of the normal maps. For the textures made from now on">>
         , obj_member<"Flip Y for normals",     &settings::m_bFlipNormalY,           member_help<"Flip the Y (green) of the normal maps the import makes, for a model whose normal maps are the other convention (DirectX against OpenGL). Changing it flips the normal maps already made too, and only those are compiled again: the geometry does not have to be">>
         , obj_member<"Normalize normals",      &settings::m_bNormalizeNormals,      member_help<"Normalize the normal maps the import makes before they are compressed, for a model whose normals are bent (not of length one). Changing it puts it on the normal maps already made too, and only those are compiled again: the geometry does not have to be">>
