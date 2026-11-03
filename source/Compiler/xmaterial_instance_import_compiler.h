@@ -359,6 +359,22 @@ namespace xmaterial_instance::import
             return bCut;
         }
 
+        // Whether a specular map's alpha holds anything: CryEngine and Lumberyard (Bistro) keep the smoothness there; an opaque one has none to give
+        bool HasSmoothnessInAlpha(const std::wstring& Path) const noexcept
+        {
+            if (Info(Path).m_Channels != 4 && Info(Path).m_Channels != 2) return false;
+            FILE* pFile = OpenImage(Full(Path));
+            if (!pFile) return false;
+            int W = 0, H = 0, C = 0;
+            auto* pData = stbi_load_from_file(pFile, &W, &H, &C, 4);
+            std::fclose(pFile);
+            if (!pData) return false;
+            bool bVaries = false;
+            for (int i = 1, n = W * H; i < n && !bVaries; ++i) bVaries = pData[i * 4 + 3] != pData[3];
+            stbi_image_free(pData);
+            return bVaries;
+        }
+
         static std::string GuidHex(std::uint64_t Value) { return std::format("{:016X}", Value); }
 
         // Named like every resource folder: the guid without leading zeros (xresource_mgr loads by {:X})
@@ -689,9 +705,13 @@ namespace xmaterial_instance::import
             }
             if (!bInstanced)
                 for (const auto* pMap : { &Diffuse, &Normal, &Rough, &Gloss, &Metal, &AO, &Opacity, &EmissiveMapFile }) if (!pMap->empty()) m_Claimed.insert(Fold(*pMap));
+            // No roughness or glossiness map: the smoothness in the alpha of the specular map, when it has any
+            auto SpecularMap = Rough.empty() && Gloss.empty() ? Resolve(Param(M, "SpecularMap")) : std::wstring{};
+            if (!SpecularMap.empty() && !HasSmoothnessInAlpha(SpecularMap)) SpecularMap.clear();
             const auto Color     = Floats(Param(M, "DiffuseColor"),  { 1, 1, 1, 1 });
             const auto Emissive  = Floats(Param(M, "EmissiveColor"), { 0, 0, 0, 1 });
             const float Shininess = std::strtof(Param(M, "ShininessFactor").c_str(), nullptr);
+            const auto  Specular  = Floats(Param(M, "SpecularColor"), { 1, 1, 1, 1 });
 
             // Emission is ORME.a times the albedo: an emitter's albedo is its emissive color (brightest channel 1)
             const float EmissiveMax = std::max({ Emissive[0], Emissive[1], Emissive[2] });
@@ -835,7 +855,8 @@ namespace xmaterial_instance::import
             // the model's PBR factors when it has them (glTF, an OBJ's Pr / Pm), else the roughness of the Blinn-Phong exponent and no metal
             const auto  RoughnessParam = Param(M, "RoughnessFactor"), MetallicParam = Param(M, "MetallicFactor");
             const float Roughness = !RoughnessParam.empty() ? std::clamp(std::strtof(RoughnessParam.c_str(), nullptr), 0.0f, 1.0f)
-                                  : Shininess > 0 ? std::sqrt(2.0f / (Shininess + 2.0f)) : 0.8f;   // Blinn-Phong exponent to roughness
+                                  : std::max({ Specular[0], Specular[1], Specular[2] }) <= 0 ? 0.8f     // (no highlight at all, whatever its exponent)
+                                  : Shininess > 0 ? std::pow(2.0f / (Shininess + 2.0f), 0.25f) : 0.8f;  // Blinn-Phong exponent to GGX alpha = sqrt(2 / (n + 2)), and the shaders square the roughness to get alpha
             const float Metallic  = !MetallicParam.empty() ? std::clamp(std::strtof(MetallicParam.c_str(), nullptr), 0.0f, 1.0f) : 0.0f;
             const float Emission  = EmissiveMax > 0 ? 1.0f : 0.0f;
 
@@ -854,6 +875,7 @@ namespace xmaterial_instance::import
             else                              Mixes.push_back(Constant(1, to::R));
             if (Usable(Rough, "roughness")) { Mixes.push_back(Channel(Rough, bSharedRM ? from::G : from::R, to::G)); Key += "|r:" + xstrtool::UTF16ToUTF8(Rough); }
             else if (Usable(Gloss, "glossiness")) { Mixes.push_back(Channel(Gloss, from::R, to::G, true)); Key += "|g:" + xstrtool::UTF16ToUTF8(Gloss); }
+            else if (Usable(SpecularMap, "smoothness")) { Mixes.push_back(Channel(SpecularMap, from::A, to::G, true)); Key += "|sa:" + xstrtool::UTF16ToUTF8(SpecularMap); }
             else                            { Mixes.push_back(Constant(Roughness, to::G)); Key += std::format("|r{:.3f}", Roughness); }
             if (Usable(Metal, "metalness")) { Mixes.push_back(Channel(Metal, bSharedRM ? from::B : from::R, to::B)); Key += "|m:" + xstrtool::UTF16ToUTF8(Metal); }
             else                            { Mixes.push_back(Constant(Metallic, to::B)); Key += std::format("|m{:.3f}", Metallic); }
