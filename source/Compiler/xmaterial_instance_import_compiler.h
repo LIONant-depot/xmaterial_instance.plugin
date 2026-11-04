@@ -408,6 +408,19 @@ namespace xmaterial_instance::import
 
         // Whether the generator made this texture: it is on the list of the earlier compile; with no list yet (a project from before the lists) a texture
         // whose Info links a Material Instance that links the geometry
+        // The roughness of a constant ORME texture, -1 when it isn't one
+        float ConstantORMERoughness(const xrsc::texture_ref Texture) const noexcept
+        {
+            xtexture_rsc::descriptor     Descriptor;
+            xproperty::settings::context C;
+            if (Descriptor.Serialize(true, DescriptorFolder("Texture", Texture.m_Instance.m_Value) + L"\\Descriptor.txt", C)) return -1.0f;
+            if (!IsConstantTexture(Texture)) return -1.0f;
+            if (const auto* pORME = std::get_if<xtexture_rsc::orme_input>(&Descriptor.m_InputVariant)) return pORME->m_Roughness.m_Constant;
+            if (const auto* pMix = std::get_if<xtexture_rsc::mix_source>(&Descriptor.m_InputVariant))        // (an older import's)
+                for (const auto& E : pMix->m_Inputs) if (E.m_CopyTo == xtexture_rsc::compositing_to::G) return E.m_Constant;
+            return -1.0f;
+        }
+
         bool IsGenerated(const xrsc::texture_ref Texture) noexcept
         {
             const xresource::full_guid Guid{ Texture.m_Instance, xtexture_rsc::resource_type_guid_v };
@@ -949,6 +962,26 @@ namespace xmaterial_instance::import
                         if (m_Info) m_Info(std::format("Import Materials: material {}: its {} {} is found, the slot takes it", M.m_Name, bPlaceholder ? "missing" : "constant", F.m_NameHint));
                     }
                 }
+                // A roughness still exactly what the old Blinn-Phong conversion gave (GGX alpha stored as roughness: Ns 100 was a near mirror) was never the user's choice: the import's new value
+                const float OldRoughness = Shininess > 0 ? std::sqrt(2.0f / (Shininess + 2.0f)) : 0.8f;
+                for (auto& E : Existing.m_Overrides)
+                {
+                    if (E.m_Type == xmaterial::param_type::TEXTURE || E.m_NameHint != "RoughnessFactor" || std::abs(E.m_Value.m_X - OldRoughness) > 1e-4f) continue;
+                    for (const auto& F : Fresh.m_Overrides) if (F.m_ID == E.m_ID) E.m_Value = F.m_Value;
+                }
+                // ... or held by a constant ORME texture (before the factors): the fresh slot, and the factors that go with it
+                bool bOldORME = false;
+                for (auto& E : Existing.m_Overrides)
+                {
+                    if (E.m_Type != xmaterial::param_type::TEXTURE || E.m_NameHint != "SamplerORME") continue;
+                    const float R = ConstantORMERoughness(E.m_Texture);
+                    if (R < 0.0f || std::abs(R - OldRoughness) > 2e-3f) continue;
+                    for (const auto& F : Fresh.m_Overrides) if (F.m_ID == E.m_ID && F.m_Type == xmaterial::param_type::TEXTURE) { E.m_Texture = F.m_Texture; bOldORME = true; }
+                }
+                if (bOldORME)
+                    for (const auto& F : Fresh.m_Overrides)
+                        if (F.m_Type != xmaterial::param_type::TEXTURE && std::ranges::find(Existing.m_Overrides, F.m_ID, &xmaterial_instance::override_entry::m_ID) == Existing.m_Overrides.end())
+                            Existing.m_Overrides.push_back(F);
             }))
                 m_Warning(std::format("Import Materials: the descriptor of the instance {} could not be read: it is left as it is", M.m_Name));
             xresource_pipeline::virtual_rsc::EmitInfo(Folder, InstanceGuid, M.m_Name, m_Owner);
