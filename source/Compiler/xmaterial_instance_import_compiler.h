@@ -359,8 +359,9 @@ namespace xmaterial_instance::import
             return bCut;
         }
 
-        // Whether a specular map's alpha holds anything: CryEngine and Lumberyard (Bistro) keep the smoothness there; an opaque one has none to give
-        bool HasSmoothnessInAlpha(const std::wstring& Path) const noexcept
+        // Whether a specular map's alpha holds anything: Bistro's _spec maps keep the roughness there (their mortar is the bright part; read as smoothness, mortar and
+        // streaks were mirrors, Tomas 2026-11-04). An opaque one has none to give
+        bool HasRoughnessInAlpha(const std::wstring& Path) const noexcept
         {
             if (Info(Path).m_Channels != 4 && Info(Path).m_Channels != 2) return false;
             FILE* pFile = OpenImage(Full(Path));
@@ -409,6 +410,14 @@ namespace xmaterial_instance::import
         // Whether the generator made this texture: it is on the list of the earlier compile; with no list yet (a project from before the lists) a texture
         // whose Info links a Material Instance that links the geometry
         // The roughness of a constant ORME texture, -1 when it isn't one
+        bool ORMEInvertsSpecularAlpha(const xrsc::texture_ref Texture) const noexcept      // (an import of 2026-11-04 took that alpha as smoothness)
+        {
+            xtexture_rsc::descriptor     Descriptor;
+            xproperty::settings::context C;
+            if (Descriptor.Serialize(true, DescriptorFolder("Texture", Texture.m_Instance.m_Value) + L"\\Descriptor.txt", C)) return false;
+            const auto* pORME = std::get_if<xtexture_rsc::orme_input>(&Descriptor.m_InputVariant);
+            return pORME && pORME->m_Roughness.m_bInvert && pORME->m_Roughness.m_CopyFrom == xtexture_rsc::compositing_from::A;
+        }
         float ConstantORMERoughness(const xrsc::texture_ref Texture) const noexcept
         {
             xtexture_rsc::descriptor     Descriptor;
@@ -718,9 +727,9 @@ namespace xmaterial_instance::import
             }
             if (!bInstanced)
                 for (const auto* pMap : { &Diffuse, &Normal, &Rough, &Gloss, &Metal, &AO, &Opacity, &EmissiveMapFile }) if (!pMap->empty()) m_Claimed.insert(Fold(*pMap));
-            // No roughness or glossiness map: the smoothness in the alpha of the specular map, when it has any
+            // No roughness or glossiness map: the roughness in the alpha of the specular map, when it has any
             auto SpecularMap = Rough.empty() && Gloss.empty() ? Resolve(Param(M, "SpecularMap")) : std::wstring{};
-            if (!SpecularMap.empty() && !HasSmoothnessInAlpha(SpecularMap)) SpecularMap.clear();
+            if (!SpecularMap.empty() && !HasRoughnessInAlpha(SpecularMap)) SpecularMap.clear();
             const auto Color     = Floats(Param(M, "DiffuseColor"),  { 1, 1, 1, 1 });
             const auto Emissive  = Floats(Param(M, "EmissiveColor"), { 0, 0, 0, 1 });
             const float Shininess = std::strtof(Param(M, "ShininessFactor").c_str(), nullptr);
@@ -888,7 +897,7 @@ namespace xmaterial_instance::import
             else                              Mixes.push_back(Constant(1, to::R));
             if (Usable(Rough, "roughness")) { Mixes.push_back(Channel(Rough, bSharedRM ? from::G : from::R, to::G)); Key += "|r:" + xstrtool::UTF16ToUTF8(Rough); }
             else if (Usable(Gloss, "glossiness")) { Mixes.push_back(Channel(Gloss, from::R, to::G, true)); Key += "|g:" + xstrtool::UTF16ToUTF8(Gloss); }
-            else if (Usable(SpecularMap, "smoothness")) { Mixes.push_back(Channel(SpecularMap, from::A, to::G, true)); Key += "|sa:" + xstrtool::UTF16ToUTF8(SpecularMap); }
+            else if (Usable(SpecularMap, "roughness")) { Mixes.push_back(Channel(SpecularMap, from::A, to::G)); Key += "|ra:" + xstrtool::UTF16ToUTF8(SpecularMap); }
             else                            { Mixes.push_back(Constant(Roughness, to::G)); Key += std::format("|r{:.3f}", Roughness); }
             if (Usable(Metal, "metalness")) { Mixes.push_back(Channel(Metal, bSharedRM ? from::B : from::R, to::B)); Key += "|m:" + xstrtool::UTF16ToUTF8(Metal); }
             else                            { Mixes.push_back(Constant(Metallic, to::B)); Key += std::format("|m{:.3f}", Metallic); }
@@ -961,6 +970,12 @@ namespace xmaterial_instance::import
                         E.m_Texture = F.m_Texture;
                         if (m_Info) m_Info(std::format("Import Materials: material {}: its {} {} is found, the slot takes it", M.m_Name, bPlaceholder ? "missing" : "constant", F.m_NameHint));
                     }
+                }
+                // That alpha inverted by an earlier import: the fresh slot
+                for (auto& E : Existing.m_Overrides)
+                {
+                    if (E.m_Type != xmaterial::param_type::TEXTURE || E.m_NameHint != "SamplerORME" || !ORMEInvertsSpecularAlpha(E.m_Texture)) continue;
+                    for (const auto& F : Fresh.m_Overrides) if (F.m_ID == E.m_ID && F.m_Type == xmaterial::param_type::TEXTURE) E.m_Texture = F.m_Texture;
                 }
                 // A roughness still exactly what the old Blinn-Phong conversion gave (GGX alpha stored as roughness: Ns 100 was a near mirror) was never the user's choice: the import's new value
                 const float OldRoughness = Shininess > 0 ? std::sqrt(2.0f / (Shininess + 2.0f)) : 0.8f;
