@@ -143,6 +143,13 @@ namespace xmaterial_instance::import
             std::replace(Path.begin(), Path.end(), L'/', L'\\');
             return Path;
         }
+        // A path as the project writes it (\, ProjectPath) or as a model names it (\ or /), as a path of this platform: std::filesystem splits only on / on Linux,
+        // where "Assets\x\y.png" would be one file name (its stem the whole path, its parent the project)
+        static std::filesystem::path Native(std::wstring Path) noexcept
+        {
+            for (auto& c : Path) if (c == L'\\' || c == L'/') c = static_cast<wchar_t>(std::filesystem::path::preferred_separator);
+            return std::filesystem::path(std::move(Path));
+        }
         // NameKey without what a file manager or a download adds to a copy's name: "x - Copy", "x - Copy (2)", "x (1)", "x_copy", "x-copy". The last resort of Resolve:
         // the texture the model names is next to it under such a name
         static std::wstring CopyKey(const std::filesystem::path& Name) noexcept
@@ -170,7 +177,7 @@ namespace xmaterial_instance::import
         {
             namespace fs = std::filesystem;
             if (ColorMap.empty()) return {};
-            const fs::path Color = fs::path(m_ProjectPath) / ColorMap;
+            const fs::path Color = fs::path(m_ProjectPath) / Native(ColorMap);
             std::wstring   Base  = fs::path(CopyKey(Color.filename())).stem().wstring();
             for (const wchar_t* pRole : { L"basecolor", L"base_color", L"albedo", L"diffuse", L"colour", L"color", L"diff", L"col" })
                 if (const std::wstring_view Role = pRole; Base.ends_with(Role) && Base.size() > Role.size())
@@ -220,7 +227,7 @@ namespace xmaterial_instance::import
             namespace fs = std::filesystem;
             std::error_code Ec;
             const fs::path  Project  = fs::path(m_ProjectPath).lexically_normal();
-            const fs::path  ModelDir = (Project / m_ModelPath).lexically_normal().parent_path();
+            const fs::path  ModelDir = (Project / Native(m_ModelPath)).lexically_normal().parent_path();
 
             // UTF-8 to wide: a narrow std::filesystem::path would read the bytes as the code page (on Windows), and lose any name that is not ASCII
             std::wstring Wide = xstrtool::UTF8ToUTF16(Raw);
@@ -257,7 +264,7 @@ namespace xmaterial_instance::import
             if (Found.empty())
             {
                 const std::wstring Names[] = { L"textures", L"texture", L"tex", L"images", L"image", L"maps"
-                                             , Fold(fs::path(m_ModelPath).stem().wstring() + L".fbm"), Fold(Path.parent_path().filename().wstring()) };
+                                             , Fold(Native(m_ModelPath).stem().wstring() + L".fbm"), Fold(Path.parent_path().filename().wstring()) };
                 for (const fs::path& Base : { ModelDir, ModelDir.parent_path() })
                 {
                     std::error_code E;
@@ -329,7 +336,7 @@ namespace xmaterial_instance::import
             FILE* pFile = nullptr;
             return _wfopen_s(&pFile, Path.c_str(), L"rb") == 0 ? pFile : nullptr;
         #else
-            return std::fopen(xstrtool::UTF16ToUTF8(Path).c_str(), "rb");
+            return std::fopen(xstrtool::UTF16ToUTF8(Native(Path).wstring()).c_str(), "rb");      // (Full: the project's \)
         #endif
         }
 
@@ -503,11 +510,11 @@ namespace xmaterial_instance::import
             return Input;
         }
 
-        static std::string Stem(const std::wstring& Path) { return xstrtool::UTF16ToUTF8(std::filesystem::path(Path).stem().wstring()); }
+        static std::string Stem(const std::wstring& Path) { return xstrtool::UTF16ToUTF8(Native(Path).stem().wstring()); }
 
         static bool LooksLikeNormalMap(const std::string& Path) noexcept
         {
-            const auto Lower = xstrtool::ToLowerCopy(std::filesystem::path(Path).stem().string());
+            const auto Lower = xstrtool::ToLowerCopy(xstrtool::UTF16ToUTF8(Native(xstrtool::UTF8ToUTF16(Path)).stem().wstring()));
             for (auto* p : { "ddn", "normal", "nrm", "norm" }) if (Lower.find(p) != std::string::npos) return true;
             return Lower.ends_with("_n");
         }
@@ -520,7 +527,7 @@ namespace xmaterial_instance::import
         {
             namespace fs = std::filesystem;
             const fs::path Project  = fs::path(m_ProjectPath).lexically_normal();
-            const fs::path ModelDir = (Project / m_ModelPath).lexically_normal().parent_path();
+            const fs::path ModelDir = (Project / Native(m_ModelPath)).lexically_normal().parent_path();
             fs::path       Root     = ModelDir;
             if (const auto Name = Fold(ModelDir.filename().wstring()); Name == L"source" || Name == L"sources" || Name == L"src")
                 if (const auto Up = ModelDir.parent_path(); !Up.lexically_relative(Project).empty() && !Up.lexically_relative(Project).wstring().starts_with(L".."))
@@ -564,7 +571,7 @@ namespace xmaterial_instance::import
         {
             namespace fs = std::filesystem;
             const fs::path Project  = fs::path(m_ProjectPath).lexically_normal();
-            const fs::path ModelDir = (Project / m_ModelPath).lexically_normal().parent_path();
+            const fs::path ModelDir = (Project / Native(m_ModelPath)).lexically_normal().parent_path();
             fs::path       Root     = ModelDir;
             if (const auto Name = Fold(ModelDir.filename().wstring()); Name == L"source" || Name == L"sources" || Name == L"src")
                 if (const auto Up = ModelDir.parent_path(); !Up.lexically_relative(Project).empty() && !Up.lexically_relative(Project).wstring().starts_with(L".."))
@@ -617,7 +624,7 @@ namespace xmaterial_instance::import
         // slot of an FBX's shininess is a roughness). xLION is roughness based: a roughness is used as it is, only a glossiness is turned upside down
         static bool NameHas(const std::wstring& Path, std::initializer_list<const char*> Words) noexcept
         {
-            const auto Lower = xstrtool::ToLowerCopy(std::filesystem::path(Path).stem().string());
+            const auto Lower = xstrtool::ToLowerCopy(xstrtool::UTF16ToUTF8(Native(Path).stem().wstring()));
             for (auto* p : Words) if (Lower.find(p) != std::string::npos) return true;
             return false;
         }
@@ -667,7 +674,7 @@ namespace xmaterial_instance::import
                 const auto ByName = [&](std::wstring& Map, const char* pWhat, std::initializer_list<const char*> Words)
                 {
                     if (!Map.empty() || bInstanced) return;      // (the instanced cards are given the unclaimed maps below)
-                    Map = FindByName({ xstrtool::UTF8ToUTF16(M.m_Name), bModelSet ? std::filesystem::path(m_ModelPath).stem().wstring() : std::wstring{} }, Words);
+                    Map = FindByName({ xstrtool::UTF8ToUTF16(M.m_Name), bModelSet ? Native(m_ModelPath).stem().wstring() : std::wstring{} }, Words);
                     if (!Map.empty() && m_Info) m_Info(std::format("Import Materials: material {}: the {} map is not named by the model, {} (named after the material or the model) is taken", M.m_Name, pWhat, UTF8(Map)));
                 };
                 if (RawDiffuse.empty())                                    ByName(Diffuse, "color",  { "albedo", "basecolor", "base_color", "diffuse", "color", "colour", "cor", "diff", "col" });
