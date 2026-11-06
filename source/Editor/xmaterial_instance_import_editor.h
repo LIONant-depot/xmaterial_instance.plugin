@@ -20,6 +20,7 @@
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_commands_assets.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_import.h"
 
+#include <algorithm>
 #include <charconv>
 #include <filesystem>
 #include <fstream>
@@ -27,6 +28,17 @@
 
 namespace xmaterial_instance::import::editor
 {
+    // The folder of a library info path. The library writes them with '\\' (Library\\Descriptors\\Type\\..\\G.desc\\info.txt), which only Windows' std::filesystem
+    // splits on: on Linux the parent was the library's folder and no generated texture's descriptor was found (ApplyImportCompressions said "already have these
+    // compressions", a normal map option reached none of the normal maps).
+    inline std::filesystem::path InfoFolder(std::wstring InfoPath) noexcept
+    {
+    #if !defined(_WIN32)
+        std::replace(InfoPath.begin(), InfoPath.end(), L'\\', L'/');
+    #endif
+        return std::filesystem::path(InfoPath).parent_path();
+    }
+
     // What a geometry descriptor has of the import
     struct slots
     {
@@ -232,7 +244,7 @@ namespace xmaterial_instance::import::editor
                 xresource_editor::g_LibMgr.getNodeInfo(m_Doc.m_LibraryGuid, Guid, [&](xresource_editor::library_db::info_node& Node) { InfoPath = Node.m_Path; });
                 if (InfoPath.empty()) continue;
 
-                const auto Path = (std::filesystem::path(InfoPath).parent_path() / L"Descriptor.txt").wstring();
+                const auto Path = (InfoFolder(InfoPath) / L"Descriptor.txt").wstring();
                 xtexture_rsc::descriptor D;
                 xproperty::settings::context Context;
                 if (D.Serialize(true, Path, Context)) continue;
@@ -340,7 +352,7 @@ namespace xmaterial_instance::import::editor
                 xresource_editor::g_LibMgr.getNodeInfo(m_Doc.m_LibraryGuid, Guid, [&](xresource_editor::library_db::info_node& Node) { InfoPath = Node.m_Path; });
                 if (InfoPath.empty()) continue;
 
-                const auto Path = (std::filesystem::path(InfoPath).parent_path() / L"Descriptor.txt").wstring();
+                const auto Path = (InfoFolder(InfoPath) / L"Descriptor.txt").wstring();
                 xtexture_rsc::descriptor D;
                 xproperty::settings::context Context;
                 if (D.Serialize(true, Path, Context)) continue;
