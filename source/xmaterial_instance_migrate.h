@@ -6,6 +6,7 @@
 // descriptor made from the material through the descriptor API, change the overrides, write the ones that changed and queue their compile. Run by the commands of the material
 // editor, which also snapshot the files (Snapshot / Restore) so an undo puts them back.
 // ponytail: reads every descriptor of the project's MaterialInstance folder and rewrites the files on disk; an Instance editor that has the file open keeps its own copy until reopened.
+#include "dependencies/xLIONRender/src/xlionrender_env.h"      // (one answer to MSVC's C4996, header only)
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_intance_descriptor.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
 
@@ -132,7 +133,7 @@ namespace xmaterial_instance
         {
             const auto Eol = Text.find('\n', At);
             std::uint64_t Key = 0; std::size_t Size = 0;
-            if (Eol == std::string::npos || std::sscanf(Text.c_str() + At, "%llx %zu", reinterpret_cast<unsigned long long*>(&Key), &Size) != 2) return;
+            if (Eol == std::string::npos || xlionrender::Scan(Text.c_str() + At, "%llx %zu", reinterpret_cast<unsigned long long*>(&Key), &Size) != 2) return;
             {
                 std::ofstream Out(std::filesystem::path(DescriptorPath(Descriptors, Key)), std::ios::binary | std::ios::trunc);
                 Out.write(Text.data() + Eol + 1, static_cast<std::streamsize>(Size));
