@@ -19,6 +19,7 @@
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_intance_descriptor.h"
 #include "plugins/xtexture.plugin/source/xtexture_rsc_descriptor.h"
 #include "dependencies/xraw3d/source/xraw3d.h"
+#include "dependencies/xblend_unzip/source/xblend_unzip.h"
 #include "dependencies/stb/stb_image.h"
 
 #include <algorithm>
@@ -51,6 +52,10 @@ namespace xmaterial_instance::import
         void Emit(const std::vector<xraw3d::geom::material_instance>& Materials, const std::vector<xraw3d::geom::facet>& Facets = {}) noexcept
         {
             m_bHadList = m_Previous.Load(m_OwnerFolder);
+
+            // A .blend is read through its extract (xblend_unzip, already made by the geometry's import): the textures sit beside its glTF
+            if (std::filesystem::path(m_ModelPath).extension() == L".blend")
+                m_ModelPath = std::filesystem::path(xblend_unzip::ExtractFolder(Full(m_ModelPath)) / L"scene.gltf").lexically_relative(m_ProjectPath).wstring();
 
             // The main material: of the ones the model gives no map at all, the one that covers the most of the model. It is the one the files named after the model are
             // for ("Velociraptor_Cor.jpeg"); the others take the maps nobody took (the feathers of a raptor are not its skin)
