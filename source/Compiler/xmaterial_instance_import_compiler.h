@@ -637,10 +637,18 @@ namespace xmaterial_instance::import
         // The material's template of slots (the material compiler leaves it in its log)
         bool LoadTemplate(xmaterial_instance::descriptor& D, xrsc::material_ref Material) noexcept
         {
-            const auto Path = std::format(L"{}\\Cache\\Resources\\Logs\\Material\\{:02X}\\{:02X}\\{:X}.log\\MaterialInstance.txt", m_ProjectPath
+            const auto Rel = std::format(L"Cache/Resources/Logs/Material/{:02X}/{:02X}/{:X}.log/MaterialInstance.txt"
                 , Material.m_Instance.m_Value & 0xff, (Material.m_Instance.m_Value >> 8) & 0xff, Material.m_Instance.m_Value);
+            const auto Path = std::format(L"{}/{}", m_ProjectPath, Rel);
             xtextfile::stream File;
-            if (auto Err = File.Open(true, Path, xtextfile::file_type::TEXT); Err) return false;
+            if (auto Err = File.Open(true, Path, xtextfile::file_type::TEXT); Err)
+            {
+                // Imported before its material was compiled: the instances are not made and, not on the geometry's list, were never compiled (C90). The
+                // geometry depends on the template while it is missing: its arrival makes the geometry stale, and that compile makes them. (Only while
+                // missing: the material rewrites it on every compile, which would recompile every imported model with it)
+                if (std::ranges::find(m_Dependencies.m_Assets, Rel) == m_Dependencies.m_Assets.end()) m_Dependencies.m_Assets.push_back(Rel);
+                return false;
+            }
             xproperty::settings::context Context;
             if (auto Err = xproperty::sprop::serializer::Stream(File, D, Context); Err) return false;
             D.m_MaterialRef = Material;
