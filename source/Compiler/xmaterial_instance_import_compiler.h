@@ -955,6 +955,8 @@ namespace xmaterial_instance::import
             if (!LoadTemplate(Instance, Material))
             {
                 m_Warning(std::format("Import Materials: material {}: the material {:016X} has no template of its slots yet (compile it first): its instance is not made", M.m_Name, Material.m_Instance.m_Value));
+                // C102: skipped is not removed - an instance an earlier compile made stays this geometry's (a fresh project compiles the geometry before its material)
+                if (m_Previous.Contains(InstanceGuid)) m_Dependencies.m_VirtualResources.push_back(InstanceGuid);
                 return;
             }
 
